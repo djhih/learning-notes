@@ -1,0 +1,21 @@
+---
+# Per-service cgroup rules. KEEP EMPTY HERE — fill values in host_vars/<host>.yml
+# after baseline data is collected (Day 8 of the 2-week sprint).
+#
+# Schema:
+#   cgroup_rules:
+#     <unit-name>.service:
+#       memory_max:   "8G"     # systemd MemoryMax
+#       memory_high:  "7G"     # systemd MemoryHigh (soft limit, triggers reclaim)
+#       memory_low:   "2G"     # systemd MemoryLow (protected from reclaim)
+#       cpu_weight:   100      # 1..10000, default 100
+#       cpu_quota:    "200%"   # CPUQuota, % of one CPU
+#       io_weight:    100      # 1..10000, default 100
+#       tasks_max:    1000     # TasksMax
+#
+# Defaults are intentionally empty so an accidental playbook run is a no-op.
+
+cgroup_rules: {}
+
+# Where the collector writes its SQLite DB on remote hosts.
+baseline_db_dir: /var/lib/cgroup-baseline

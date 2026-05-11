@@ -1,0 +1,17 @@
+[Unit]
+Description=cgroup v2 baseline collector (oneshot)
+Documentation=https://github.com/jhih/llt/cgroup
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cgroup-baseline-collect
+User=root
+Group=root
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/cgroup-baseline
+# /sys/fs/cgroup is read-only-mounted to this unit by default protection,
+# but cgroup metric files are world-readable so no extra access needed.

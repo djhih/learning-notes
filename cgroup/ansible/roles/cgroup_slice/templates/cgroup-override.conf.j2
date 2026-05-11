@@ -1,0 +1,25 @@
+# Managed by Ansible (role: cgroup_slice). Do not edit.
+# Source: roles/cgroup_slice/templates/cgroup-override.conf.j2
+# Service: {{ item.key }}
+[Service]
+{% if item.value.memory_max is defined %}
+MemoryMax={{ item.value.memory_max }}
+{% endif %}
+{% if item.value.memory_high is defined %}
+MemoryHigh={{ item.value.memory_high }}
+{% endif %}
+{% if item.value.memory_low is defined %}
+MemoryLow={{ item.value.memory_low }}
+{% endif %}
+{% if item.value.cpu_weight is defined %}
+CPUWeight={{ item.value.cpu_weight }}
+{% endif %}
+{% if item.value.cpu_quota is defined %}
+CPUQuota={{ item.value.cpu_quota }}
+{% endif %}
+{% if item.value.io_weight is defined %}
+IOWeight={{ item.value.io_weight }}
+{% endif %}
+{% if item.value.tasks_max is defined %}
+TasksMax={{ item.value.tasks_max }}
+{% endif %}

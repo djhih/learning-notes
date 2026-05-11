@@ -1,0 +1,7 @@
+---
+- name: Deploy cgroup baseline collector
+  hosts: baseline_targets
+  become: true
+  gather_facts: true
+  roles:
+    - baseline_collector

@@ -1,0 +1,46 @@
+---
+- name: Ensure collector data directory exists
+  ansible.builtin.file:
+    path: "{{ baseline_db_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install collector script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../collector/collect.py"
+    dest: /usr/local/bin/cgroup-baseline-collect
+    owner: root
+    group: root
+    mode: '0755'
+  notify: Restart collector timer
+
+- name: Install systemd service unit
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../collector/cgroup-baseline.service"
+    dest: /etc/systemd/system/cgroup-baseline.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart collector timer
+
+- name: Install systemd timer unit
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../collector/cgroup-baseline.timer"
+    dest: /etc/systemd/system/cgroup-baseline.timer
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart collector timer
+
+- name: Enable and start collector timer
+  ansible.builtin.systemd:
+    name: cgroup-baseline.timer
+    enabled: true
+    state: started
+    daemon_reload: true

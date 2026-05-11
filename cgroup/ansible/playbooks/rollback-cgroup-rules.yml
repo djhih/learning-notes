@@ -1,0 +1,39 @@
+---
+# Remove all managed cgroup drop-in files. Use when a rule set causes
+# problems and the safest path is to revert all hosts at once.
+#
+# After rollback, services keep their CURRENT cgroup state until restarted.
+# To fully revert: `systemctl daemon-reload && systemctl restart <unit>`.
+
+- name: Roll back cgroup rules
+  hosts: cgroup_targets
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Find managed drop-in files
+      ansible.builtin.find:
+        paths: /etc/systemd/system/
+        patterns: "50-cgroup.conf"
+        recurse: true
+      register: dropins
+
+    - name: Remove drop-in files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ dropins.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: removed
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: removed.changed
+
+    - name: Notice — services need restart to fully revert
+      ansible.builtin.debug:
+        msg: |
+          Removed {{ dropins.files | length }} drop-in file(s).
+          Run `systemctl restart <unit>` on affected services to fully revert
+          cgroup limits to systemd defaults.

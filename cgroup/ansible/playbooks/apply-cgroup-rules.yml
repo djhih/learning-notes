@@ -1,0 +1,15 @@
+---
+# Apply cgroup rules via systemd drop-ins.
+# Does NOT restart services automatically — prints a notice listing units that
+# need a manual `systemctl restart` for the new limits to take effect.
+#
+# Usage:
+#   ansible-playbook playbooks/apply-cgroup-rules.yml --check --diff   # dry run
+#   ansible-playbook playbooks/apply-cgroup-rules.yml --limit canary   # apply
+
+- name: Apply cgroup rules
+  hosts: cgroup_targets
+  become: true
+  gather_facts: false
+  roles:
+    - cgroup_slice

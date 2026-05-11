@@ -1,0 +1,39 @@
+---
+- name: Skip if no cgroup_rules defined
+  ansible.builtin.meta: end_play
+  when: cgroup_rules | length == 0
+
+- name: Ensure drop-in directories exist
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item.key }}.d"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: "{{ cgroup_rules | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Write cgroup drop-in files
+  ansible.builtin.template:
+    src: cgroup-override.conf.j2
+    dest: "/etc/systemd/system/{{ item.key }}.d/50-cgroup.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ cgroup_rules | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  notify: Reload systemd
+  register: dropin_changes
+
+- name: Notice — restart required for new limits to take effect
+  ansible.builtin.debug:
+    msg: |
+      Drop-in updated. The following services need a manual restart for the
+      new cgroup limits to apply:
+      {% for r in dropin_changes.results if r.changed %}
+        systemctl restart {{ r.item.key }}
+      {% endfor %}
+      (or use `systemctl set-property <unit> <Key>=<Value>` to apply live.)
+  when: dropin_changes.changed

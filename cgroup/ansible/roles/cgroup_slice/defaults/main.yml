@@ -1,0 +1,3 @@
+---
+# Empty by default — real values come from group_vars/host_vars after baseline.
+cgroup_rules: {}
