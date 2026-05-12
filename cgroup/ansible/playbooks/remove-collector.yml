@@ -1,0 +1,56 @@
+---
+# Remove the cgroup baseline collector from baseline_targets.
+# By default the SQLite samples DB is preserved. To also wipe data, run with:
+#   ansible-playbook ... -e purge_data=true
+
+- name: Remove cgroup baseline collector
+  hosts: baseline_targets
+  become: true
+  gather_facts: false
+  vars:
+    purge_data: false
+  tasks:
+    - name: Stop and disable collector timer
+      ansible.builtin.systemd:
+        name: cgroup-baseline.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Stop collector service (in case mid-run)
+      ansible.builtin.systemd:
+        name: cgroup-baseline.service
+        state: stopped
+      failed_when: false
+
+    - name: Remove systemd unit files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/cgroup-baseline.timer
+        - /etc/systemd/system/cgroup-baseline.service
+      register: units_removed
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: units_removed.changed
+
+    - name: Remove collector script
+      ansible.builtin.file:
+        path: /usr/local/bin/cgroup-baseline-collect
+        state: absent
+
+    - name: Remove collector data directory
+      ansible.builtin.file:
+        path: "{{ baseline_db_dir }}"
+        state: absent
+      when: purge_data | bool
+
+    - name: Notice — data preserved
+      ansible.builtin.debug:
+        msg: |
+          Collector removed. Samples DB kept at {{ baseline_db_dir }}.
+          Re-run with `-e purge_data=true` to delete it.
+      when: not (purge_data | bool)
