@@ -155,32 +155,65 @@ ansible -i inventory.ini baseline_targets -b \
 
 ## Phase 3 — 等 5 分鐘確認資料累積
 
-等 5 分鐘讓 timer 跑 4～5 輪，再跑：
+等 5 分鐘讓 timer 跑 4～5 輪，用 `scripts/check-db.py` 跑診斷（避免 inline python 的 shell escaping 問題）：
 
 ```bash
-ansible -i inventory.ini baseline_targets -b -m shell -a '
-python3 -c "
-import sqlite3
-db = sqlite3.connect(\"/var/lib/cgroup-baseline/samples.db\")
-print(\"rows:\", db.execute(\"SELECT COUNT(*) FROM samples\").fetchone()[0])
-print(\"cgroups:\", db.execute(\"SELECT COUNT(DISTINCT cgroup) FROM samples\").fetchone()[0])
-print(\"timespan:\", db.execute(\"SELECT MAX(ts)-MIN(ts) FROM samples\").fetchone()[0], \"sec\")
-print(\"top 5 by memory:\")
-for r in db.execute(\"SELECT cgroup, memory_current/1024/1024 FROM samples ORDER BY ts DESC, memory_current DESC LIMIT 5\"):
-    print(f\"  {r[1]:>6} MB  {r[0]}\")
-"' --ask-pass --ask-become-pass
+ansible -i inventory.ini baseline_targets -b \
+  -m script -a 'scripts/check-db.py' \
+  --ask-pass --ask-become-pass
+```
+
+ansible 會把 script 複製到 server 上跑，輸出大致：
+
+```
+db_size:  0.03 MB (/var/lib/cgroup-baseline/samples.db)
+rows:     236
+cgroups:  47
+timespan: 240 sec (4.0 min, first=1778526225, last=1778526465)
+samples:  5 (timer fired 5 times)
+
+top 10 by memory_current at most-recent sample:
+  12629.4 MB  user.slice/user-1000.slice
+    502.0 MB  system.slice/snapd.service
+    ...
+
+last 5 sample timestamps:
+  ts=1778526465  rows=47
+  ts=1778526405  rows=47
+  ts=1778526345  rows=47
+  ts=1778526285  rows=47
+  ts=1778526225  rows=48
 ```
 
 預期：
 
 | 欄位 | 預期值 |
 |---|---|
-| `rows` | ≈ `N cgroup × 跑過幾輪`（例：50 cgroup × 5 輪 = 250） |
-| `cgroups` | 一個固定數字（你 server 上的 cgroup 總數） |
+| `rows` | ≈ `cgroups × samples`（例：47 × 5 = 235 左右） |
+| `cgroups` | 你 server 上 collector 抓得到的 cgroup 數，跟 Step 0.3 那邊算的一致 |
 | `timespan` | 接近 240～300 秒（5 分鐘 = 4～5 個 60s 間隔） |
-| `top 5 by memory` | 看到 service 名稱 + MB 數值 |
+| `samples` | timer 跑過的次數，4～5 |
+| top 10 | 看到 service 名稱 + 合理的 MB 數值 |
 
-如果 `rows` 沒在長、或 `cgroups` 不合理小，停下來 debug — 通常是 INCLUDE_PATTERNS 沒抓到該抓的（Step 0.3 那邊判讀錯）。
+如果 `rows` 沒在長 / `cgroups` 不合理小 / `samples` 沒增加，停下來 debug。
+
+### 如果 script 跑不起來（少見）
+
+可能 ansible 版本太舊不支援 `-m script` 的某些選項。fallback 用 raw inline：
+
+```bash
+# 直接看 DB 大小有沒有在長
+ansible -i inventory.ini baseline_targets -b \
+  -a 'ls -lh /var/lib/cgroup-baseline/samples.db' \
+  --ask-pass --ask-become-pass
+
+# 跑 sqlite3 CLI（要 server 上有裝）
+ansible -i inventory.ini baseline_targets -b \
+  -a 'sqlite3 /var/lib/cgroup-baseline/samples.db "SELECT COUNT(*) FROM samples"' \
+  --ask-pass --ask-become-pass
+```
+
+DB 持續變大 = collector 正常運作。
 
 ---
 

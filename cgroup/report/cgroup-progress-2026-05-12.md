@@ -89,23 +89,23 @@ Meta 那套（oomd / senpai）對我們目前規模太早。Meta 自己也是先
 
 ```
 cgroup/
-├── collector/                          # 不依賴 Ansible，可單機跑
-│   ├── collect.py                      # 主程式（嵌入 SQLite schema）
-│   ├── cgroup-baseline.service         # systemd oneshot
-│   └── cgroup-baseline.timer           # 每 60 秒觸發
-├── ansible/
-│   ├── ansible.cfg
-│   ├── inventory.example
-│   ├── group_vars/all.yml              # cgroup_rules 預設 {}
-│   ├── playbooks/
-│   │   ├── deploy-collector.yml
-│   │   ├── apply-cgroup-rules.yml
-│   │   └── rollback-cgroup-rules.yml
-│   └── roles/
-│       ├── baseline_collector/         # 部署 collect.py + timer
-│       └── cgroup_slice/               # 寫 systemd drop-in
-└── report/
-    └── cgroup-progress-2026-05-12.md   # 本文件
+─ collector/                          # 不依賴 Ansible，可單機跑
+   ─ collect.py                      # 主程式（嵌入 SQLite schema）
+   ─ cgroup-baseline.service         # systemd oneshot
+   ─ cgroup-baseline.timer           # 每 60 秒觸發
+─ ansible/
+   ─ ansible.cfg
+   ─ inventory.example
+   ─ group_vars/all.yml              # cgroup_rules 預設 {}
+   ─ playbooks/
+      ─ deploy-collector.yml
+      ─ apply-cgroup-rules.yml
+      ─ rollback-cgroup-rules.yml
+   ─ roles/
+      ─ baseline_collector/         # 部署 collect.py + timer
+      ─ cgroup_slice/               # 寫 systemd drop-in
+─ report/
+   ─ cgroup-progress-2026-05-12.md   # 本文件
 ```
 
 ### 3.2 設計決策摘要
