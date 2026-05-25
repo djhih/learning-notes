@@ -10,8 +10,6 @@ Reads /path/to/samples.db, prints:
 Usage:
   python3 analyze.py --db ~/cgroup-data/192.168.0.1/var/lib/cgroup-baseline/samples.db
 """
-from __future__ import annotations
-
 import argparse
 import sqlite3
 import sys
