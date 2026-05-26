@@ -78,6 +78,13 @@ def per_service_summary(df: pd.DataFrame) -> pd.DataFrame:
     if len(sdf) == 0:
         return pd.DataFrame()
 
+    # Per-window CPU usage: cores used between consecutive samples
+    sdf = sdf.sort_values(['cgroup', 'ts'])
+    sdf['cpu_delta_step'] = sdf.groupby('cgroup')['cpu_usage_usec'].diff()
+    sdf['ts_delta_step']  = sdf.groupby('cgroup')['ts'].diff()
+    # cores in this window = delta_usec / (delta_sec * 1_000_000)
+    sdf['cpu_cores_step'] = sdf['cpu_delta_step'] / (sdf['ts_delta_step'] * 1_000_000)
+
     grouped = sdf.groupby('cgroup')
 
     s = pd.DataFrame({
@@ -86,6 +93,8 @@ def per_service_summary(df: pd.DataFrame) -> pd.DataFrame:
         'p95_mb':          grouped['memory_current'].quantile(0.95) / 1024 / 1024,
         'cpu_delta_usec':  grouped['cpu_usage_usec'].max() - grouped['cpu_usage_usec'].min(),
         'ts_span':         grouped['ts'].max() - grouped['ts'].min(),
+        'cpu_cores_peak':  grouped['cpu_cores_step'].max(),   # peak per-window
+        'cpu_cores_p95':   grouped['cpu_cores_step'].quantile(0.95),
         'mem_psi':         grouped['mem_psi_some_avg60'].mean(),
         'cpu_psi':         grouped['cpu_psi_some_avg60'].mean(),
         'io_psi':          grouped['io_psi_some_avg60'].mean(),
@@ -94,9 +103,11 @@ def per_service_summary(df: pd.DataFrame) -> pd.DataFrame:
         'samples':         grouped.size(),
     }).reset_index()
 
-    # CPU cores used = cumulative cpu_time / wall_time
+    # CPU cores used (average over whole period) = cumulative cpu_time / wall_time
     s['cpu_cores'] = s['cpu_delta_usec'] / (s['ts_span'] * 1_000_000)
     s['cpu_cores'] = s['cpu_cores'].fillna(0)
+    s['cpu_cores_peak'] = s['cpu_cores_peak'].fillna(0)
+    s['cpu_cores_p95']  = s['cpu_cores_p95'].fillna(0)
 
     s['service'] = s['cgroup'].str.replace('system.slice/', '', regex=False)
 
@@ -132,8 +143,9 @@ def recommend_rules(summary: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
     top = summary.head(top_n).copy()
     top['memory_max']  = top['peak_mb'].apply(lambda x: round_to_size(x * 1.3))
     top['memory_high'] = top['peak_mb'].apply(lambda x: round_to_size(x * 1.15))
-    top['cpu_weight']  = top['cpu_cores'].apply(cpu_weight_from_cores)
-    return top[['service', 'peak_mb', 'cpu_cores',
+    # cpu_weight: use peak (with small fallback to avg if peak is NaN/0)
+    top['cpu_weight']  = top['cpu_cores_peak'].fillna(top['cpu_cores']).apply(cpu_weight_from_cores)
+    return top[['service', 'peak_mb', 'cpu_cores', 'cpu_cores_peak',
                 'memory_max', 'memory_high', 'cpu_weight',
                 'oom_kills', 'mem_psi']]
 
@@ -166,29 +178,39 @@ def psi_candidates(summary: pd.DataFrame,
 # ---------- Output formatters ----------
 
 def print_top_table(summary: pd.DataFrame, top_n: int) -> None:
-    print(f"\n{'=' * 70}")
+    print(f"\n{'=' * 90}")
     print(f"TOP {top_n} SERVICES BY MEMORY PEAK")
-    print('=' * 70)
+    print('=' * 90)
     top = summary.head(top_n)
-    print(f"{'service':<45} {'peak':>9} {'avg':>9} {'cores':>7}")
-    print('-' * 75)
+    print(f"{'service':<45} {'mem_peak':>9} {'mem_avg':>9} "
+          f"{'cpu_avg':>8} {'cpu_p95':>8} {'cpu_peak':>9}")
+    print('-' * 95)
     for _, r in top.iterrows():
         svc = r['service'][:43]
-        print(f"{svc:<45} {r['peak_mb']:>7.0f} MB {r['avg_mb']:>7.0f} MB "
-              f"{r['cpu_cores']:>6.2f}")
+        print(f"{svc:<45} "
+              f"{r['peak_mb']:>7.0f} MB "
+              f"{r['avg_mb']:>7.0f} MB "
+              f"{r['cpu_cores']:>8.2f} "
+              f"{r['cpu_cores_p95']:>8.2f} "
+              f"{r['cpu_cores_peak']:>9.2f}")
 
 
 def print_rules_table(rules: pd.DataFrame) -> None:
-    print(f"\n{'=' * 70}")
+    print(f"\n{'=' * 100}")
     print("RECOMMENDED CGROUP RULES (Day 9 canary candidates)")
-    print('=' * 70)
-    print(f"{'service':<35} {'peak_mb':>8} {'cores':>6} "
+    print('=' * 100)
+    print(f"{'service':<35} {'peak_mb':>8} {'cpu_avg':>8} {'cpu_peak':>9} "
           f"{'memory_max':>11} {'memory_high':>12} {'cpu_weight':>11}")
-    print('-' * 90)
+    print('-' * 100)
     for _, r in rules.iterrows():
         svc = r['service'][:33]
-        print(f"{svc:<35} {r['peak_mb']:>8.0f} {r['cpu_cores']:>6.2f} "
-              f"{r['memory_max']:>11} {r['memory_high']:>12} {r['cpu_weight']:>11}")
+        print(f"{svc:<35} "
+              f"{r['peak_mb']:>8.0f} "
+              f"{r['cpu_cores']:>8.2f} "
+              f"{r['cpu_cores_peak']:>9.2f} "
+              f"{r['memory_max']:>11} "
+              f"{r['memory_high']:>12} "
+              f"{r['cpu_weight']:>11}")
 
     has_oom = rules[rules['oom_kills'] > 0]
     if len(has_oom) > 0:
