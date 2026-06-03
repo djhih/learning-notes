@@ -1,0 +1,7 @@
+---
+- name: Deploy cgroup Prometheus exporter
+  hosts: exporter_targets
+  become: true
+  gather_facts: true
+  roles:
+    - cgroup_exporter

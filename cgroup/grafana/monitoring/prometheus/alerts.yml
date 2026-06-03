@@ -1,0 +1,29 @@
+# Alert rules — intentionally empty for now.
+#
+# Threshold + signal + action are open questions (see memory:
+# project_psi_uncertainty). Collect at least a week of baseline data first,
+# then uncomment and tune the rules below.
+#
+# Example to start from once baseline is in:
+#
+# groups:
+#   - name: cgroup-pressure
+#     rules:
+#       - alert: HighCpuPSI
+#         expr: cgroup_psi_cpu_some_avg60 > 20
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "Sustained CPU pressure on {{ $labels.service }}"
+#           description: "cpu.pressure some/avg60 = {{ $value }}% for 5m"
+#
+#       - alert: MemoryPSIFull
+#         expr: cgroup_psi_memory_full_avg60 > 10
+#         for: 5m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "All tasks stalled on memory in {{ $labels.service }}"
+
+groups: []

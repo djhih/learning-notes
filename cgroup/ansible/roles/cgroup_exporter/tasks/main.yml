@@ -1,0 +1,27 @@
+---
+- name: Install exporter script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../grafana/exporter/exporter.py"
+    dest: /usr/local/bin/cgroup-exporter
+    owner: root
+    group: root
+    mode: '0755'
+  notify: Restart cgroup exporter
+
+- name: Install systemd service unit
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../grafana/exporter/cgroup-exporter.service"
+    dest: /etc/systemd/system/cgroup-exporter.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart cgroup exporter
+
+- name: Enable and start cgroup exporter
+  ansible.builtin.systemd:
+    name: cgroup-exporter.service
+    enabled: true
+    state: started
+    daemon_reload: true

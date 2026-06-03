@@ -1,0 +1,168 @@
+{
+  "title": "cgroup overview",
+  "uid": "cgroup-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["cgroup"],
+  "timezone": "browser",
+  "time": {"from": "now-1h", "to": "now"},
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(cgroup_memory_current_bytes, service)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {"selected": false, "text": "All", "value": "$__all"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "bargauge",
+      "title": "Top 10 memory.current (by service)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "topk(10, cgroup_memory_current_bytes{service=~\"$service\"})",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "bytes", "min": 0, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}}
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "showUnfilled": true,
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "CPU usage rate (per service)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "rate(cgroup_cpu_usage_usec_total{service=~\"$service\"}[1m]) / 1e6",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "percentunit", "decimals": 2, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never"}}
+      },
+      "options": {"legend": {"showLegend": true, "displayMode": "table", "placement": "right", "calcs": ["mean", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "CPU pressure (some avg10, per service)",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "cgroup_psi_cpu_some_avg10{service=~\"$service\"}",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "percent", "min": 0, "max": 100, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never"}}
+      },
+      "options": {"legend": {"showLegend": false}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Memory pressure (some/full avg10, per service)",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "cgroup_psi_memory_some_avg10{service=~\"$service\"}",
+          "legendFormat": "some · {{service}}",
+          "refId": "A"
+        },
+        {
+          "expr": "cgroup_psi_memory_full_avg10{service=~\"$service\"}",
+          "legendFormat": "full · {{service}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "percent", "min": 0, "max": 100, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never"}}
+      },
+      "options": {"legend": {"showLegend": false}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "IO pressure (some/full avg10, per service)",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "cgroup_psi_io_some_avg10{service=~\"$service\"}",
+          "legendFormat": "some · {{service}}",
+          "refId": "A"
+        },
+        {
+          "expr": "cgroup_psi_io_full_avg10{service=~\"$service\"}",
+          "legendFormat": "full · {{service}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "percent", "min": 0, "max": 100, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never"}}
+      },
+      "options": {"legend": {"showLegend": false}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "OOM kills (rate over 5m)",
+      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "sum by (service) (rate(cgroup_memory_events_oom_kill_total{service=~\"$service\"}[5m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.0001}]}}
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"}
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "memory.current (per service)",
+      "gridPos": {"h": 4, "w": 12, "x": 12, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "cgroup_memory_current_bytes{service=~\"$service\"}",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "bytes", "custom": {"drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never"}}
+      },
+      "options": {"legend": {"showLegend": false}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    }
+  ]
+}

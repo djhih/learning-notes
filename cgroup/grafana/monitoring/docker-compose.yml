@@ -1,0 +1,48 @@
+# Prometheus + Grafana PoC stack — runs on dev laptop.
+# Scrapes the cgroup-exporter via SSH reverse tunnel (see ../scripts/tunnel.sh).
+#
+# Quickstart:
+#   cp .env.example .env && vi .env       # set GRAFANA_ADMIN_PASSWORD
+#   docker compose up -d
+#   # in another terminal: bash ../scripts/tunnel.sh <target-ip>
+#   # then open http://localhost:3000
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: cgroup-prometheus
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prom-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    extra_hosts:
+      # Allows scrape config to use host.docker.internal on Linux.
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: cgroup-grafana
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  prom-data:
+  grafana-data:
