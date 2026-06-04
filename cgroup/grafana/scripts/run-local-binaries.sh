@@ -126,43 +126,66 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-echo "==> exporter  -> 127.0.0.1:9753"
-CGROUP_EXPORTER_LISTEN=127.0.0.1:9753 python3 "$EXPORTER" >"$LOGS/exporter.log" 2>&1 &
-pids+=($!)
+alive() { kill -0 "$1" 2>/dev/null; }
 
-echo "==> prometheus -> 127.0.0.1:9090"
-"$PROM_DIR/prometheus" \
+# Launch a process, remember its pid, and fail loudly (with log tail) if it
+# dies within ~1.5s — so a port clash / bad config never sits there silently.
+start() {  # name logfile -- cmd...
+  local name="$1" log="$2"; shift 2
+  echo "==> starting $name  (log: $log)"
+  "$@" >"$log" 2>&1 &
+  local pid=$!; pids+=("$pid")
+  sleep 1.5
+  if ! alive "$pid"; then
+    echo "!! $name 啟動失敗，log 尾巴："
+    echo "------------------------------------------------------------"
+    tail -n 25 "$log" 2>/dev/null
+    echo "------------------------------------------------------------"
+    echo "   常見原因：port 被佔（docker 棧還開著？ ss -ltn | grep -E ':(9090|3000|9753) ')"
+    exit 1
+  fi
+}
+
+start exporter   "$LOGS/exporter.log" \
+  env CGROUP_EXPORTER_LISTEN=127.0.0.1:9753 python3 "$EXPORTER"
+
+start prometheus "$LOGS/prometheus.log" \
+  "$PROM_DIR/prometheus" \
   --config.file="$CFG/prometheus.yml" \
   --storage.tsdb.path="$WORK/prom-data" \
   --storage.tsdb.retention.time=15d \
-  --web.listen-address=127.0.0.1:9090 \
-  >"$LOGS/prometheus.log" 2>&1 &
-pids+=($!)
+  --web.listen-address=127.0.0.1:9090
 
-echo "==> grafana   -> 127.0.0.1:3000"
-GF_PATHS_DATA="$WORK/grafana-data" \
-GF_PATHS_LOGS="$WORK/grafana-logs" \
-GF_PATHS_PLUGINS="$WORK/grafana-plugins" \
-GF_PATHS_PROVISIONING="$CFG/provisioning" \
-GF_SERVER_HTTP_ADDR=127.0.0.1 \
-GF_SERVER_HTTP_PORT=3000 \
-GF_SECURITY_ADMIN_PASSWORD="$GRAFANA_ADMIN_PASSWORD" \
-GF_AUTH_ANONYMOUS_ENABLED=false \
-GF_USERS_ALLOW_SIGN_UP=false \
-  "$GRAF_BIN" "${GRAF_ARGS[@]}" --homepath "$GRAF_DIR" \
-  >"$LOGS/grafana.log" 2>&1 &
-pids+=($!)
+start grafana    "$LOGS/grafana.log" \
+  env GF_PATHS_DATA="$WORK/grafana-data" \
+      GF_PATHS_LOGS="$WORK/grafana-logs" \
+      GF_PATHS_PLUGINS="$WORK/grafana-plugins" \
+      GF_PATHS_PROVISIONING="$CFG/provisioning" \
+      GF_SERVER_HTTP_ADDR=127.0.0.1 \
+      GF_SERVER_HTTP_PORT=3000 \
+      GF_SECURITY_ADMIN_PASSWORD="$GRAFANA_ADMIN_PASSWORD" \
+      GF_AUTH_ANONYMOUS_ENABLED=false \
+      GF_USERS_ALLOW_SIGN_UP=false \
+      "$GRAF_BIN" "${GRAF_ARGS[@]}" --homepath "$GRAF_DIR"
 
 # --- wait for readiness + report ---
-echo -n "==> waiting for stack"
+echo -n "==> waiting for stack to be ready (tail -f $LOGS/*.log to watch)"
+ready=0
 for _ in $(seq 1 30); do
+  # if any process died during startup, stop waiting and show why
+  for p in "${pids[@]}"; do
+    if ! alive "$p"; then
+      echo; echo "!! 有 process 在啟動中掛掉了，看 log："; tail -n 25 "$LOGS"/*.log; exit 1
+    fi
+  done
   if curl -sf --max-time 2 http://127.0.0.1:3000/api/health >/dev/null 2>&1 \
      && curl -sf --max-time 2 http://127.0.0.1:9090/-/ready  >/dev/null 2>&1; then
-    break
+    ready=1; break
   fi
   echo -n "."; sleep 1
 done
 echo
+[ "$ready" = 1 ] || echo "!! 等了 30s 還沒 ready，但 process 都還活著 — 看 $LOGS/*.log 找原因"
 
 prom_target=$(curl -s --max-time 3 http://127.0.0.1:9090/api/v1/targets 2>/dev/null \
   | grep -o '"health":"[^"]*"' | head -1)
