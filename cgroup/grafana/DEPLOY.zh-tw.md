@@ -22,7 +22,7 @@
 | Docker daemon | `docker info >/dev/null && echo ok` | ✅ Docker 29.x |
 | docker compose | `docker compose version` 或 `docker-compose version` | ⚠️ 只有 v1 `docker-compose`（見下方坑 1） |
 | Ansible（Stage B） | `ansible-playbook --version` | ✅ 2.10.8 |
-| sshpass（Stage B） | `command -v sshpass` | ❌ 未裝，`sudo apt install sshpass` |
+| SSH 密碼登入（Stage B） | 能 `ssh alice@<target>` | ✅ 不需 sshpass，tunnel/monitor 用 ssh 多工，互動輸密碼一次 |
 | `.env.example` 存在 | `ls grafana/monitoring/.env.example` | ✅ |
 
 以下所有路徑都從 repo 內的 `cgroup/grafana/` 起算。
@@ -98,12 +98,14 @@ PYTHONNOUSERSITE=1 docker-compose down        # 想保留資料就不要下
 
 ## Stage B — 正式部署到目標機
 
-### B1. 裝 sshpass（隧道需要）
+### B1. SSH 連線（不需 sshpass）
 
-```bash
-sudo apt install sshpass        # Debian/Ubuntu
-# 或 sudo dnf install sshpass   # Fedora/RHEL
-```
+`tunnel.sh` 跟 `monitor.sh` 已改用 **SSH 連線多工（ControlMaster）**，不需要 sshpass、不需要裝任何東西、不需要 sudo：
+
+- `tunnel.sh`：單一連線，ssh 互動式問密碼一次。
+- `monitor.sh`：開頭建一條 master 連線輸密碼一次，之後 loop 內的 ssh/scp 全部重用那條 socket，不再問密碼。
+
+只要你能 `ssh alice@<target>`（密碼登入）就能用。
 
 ### B2. 填 inventory
 

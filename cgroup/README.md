@@ -37,6 +37,9 @@ cgroup/
 │   ├── visualize.py                     畫圖（4 張 PNG）
 │   └── day8-procedure.md                Day 8 baseline 整理流程
 │
+├── k8s-adoption-analysis.zh-tw.md       「套用 k8s 那套」評估 + 逐項比對 + 落地 plan
+├── k8s-ref/                             kubelet cm/eviction 原始碼（sparse clone，gitignored）
+│
 ├── lecture/               # 技術筆記（HTML）
 │   ├── cgroup-v2.zh-tw.html             cgroup v2 概念
 │   ├── cgroup-systemd-mapping.zh-tw.html     systemd ↔ cgroup mapping
@@ -45,7 +48,14 @@ cgroup/
 │   ├── cgroup-learning-roadmap.zh-tw.html    學習路線
 │   ├── cgroup-setup-pitfalls.zh-tw.html      設定地雷
 │   ├── meta-psi-automation.zh-tw.html        Meta PSI 自動化研究
+│   ├── cgroup-grafana-realtime.zh-tw.html    v2 即時監測設計
 │   └── gpu-monitor.html                       GPU 監控可行性
+│
+├── grafana/               # v2: 即時監測（與 v1 並存）
+│   ├── exporter/                        stdlib HTTP exporter + systemd unit
+│   ├── monitoring/                      laptop-side docker-compose 棧
+│   ├── scripts/tunnel.sh                SSH reverse-tunnel helper
+│   └── README.md
 │
 └── report/                # 階段性報告
     ├── cgroup-progress-2026-05-12.md         主報告
@@ -199,19 +209,45 @@ bash scripts/diagnose.sh
 | 議題 | 狀態 |
 |---|---|
 | Docker container（cgroupfs driver） | 不自動抓，要加 INCLUDE_PATTERN 在 `collect.py` |
-| Kubernetes pods | 不自動抓，要加遞迴 glob |
+| Kubernetes pods | 不自動抓，要加遞迴 glob（與 k8s 的關係見 [`k8s-adoption-analysis.zh-tw.md`](k8s-adoption-analysis.zh-tw.md)） |
 | cgroup v1 | **不支援**，只做 v2 |
 | GPU 資源限制 | cgroup 控不到（已查證），要用 NVIDIA MIG |
 | 自動化 deploy / rollout | 沒做，**故意**手動跑 |
-| Prometheus / Grafana | 沒做，sprint 內 SQLite + pandas 夠用 |
+| Prometheus / Grafana | v2 已加，見 [`grafana/`](grafana/)（與 v1 並存，不衝突） |
 
 ---
 
-## 接下來（next-sprint candidates）
+## 接下來（next-sprint plan）
 
-- 把目前的 IO PSI 偏高的 service 評估 PSI 自動化（oomd / 自製）
-- 視覺化接 Grafana（如果 baseline 已穩定跑 1 個月）
-- 全 fleet rollout（如果 canary + round 1 都健康）
+**方向已校準：不再拉長 baseline，改成「實際部署限制 → 看 OOM → 記錄死者」的驗證閉環。**
+先確認限制安不安全，k8s 風格的強化（memory_low / 分級 / PSI）往後挪。
+
+```
+1. [跳過] 長 baseline          用既有資料即可
+   └ 前提：先跑 analyze.py，確認目標 service 在 baseline 期間「本來就沒有 oom_kill」
+2. [既有] ansible apply 限制    從 1～2 個低風險 service 開始（log collector / cron 類）
+3. [既有] 看 OOM 數量           oom_kill 計數早就在收（collect.py / exporter 都有）
+   └ Grafana: increase(cgroup_memory_events_oom_kill_total[1h])
+   └ 同時當 canary 健康指標 + rollback 觸發條件
+4. [新做] OOM 死者明細 logger   journald→SQLite 小腳本（不要 Graylog）
+   ├ 來源：kernel OOM 行（journalctl -k 的 "Killed process …"）
+   ├ 欄位：時間 / service / PID / comm / RSS
+   └ 要漂亮 dashboard 再上 Loki（grafana/ 已有棧，Loki 是原生 log DB）
+5. [既有] rollback              關鍵 service 一出現 OOM increase 即收回
+```
+
+**會咬人的細節（部署前必讀）：**
+- `oom_kill` 是 cgroup 生命週期累計值，`systemctl restart` 後歸零 → 比「前 vs 後」要用 `increase()` 或差分，別看絕對值。
+- `oom`（撞 limit）≠ `oom_kill`（真殺）。撞 `oom` 但沒 `oom_kill` 通常是 `MemoryHigh` 在軟限流，是健康狀態。
+- 部署 `MemoryMax` 時要決定 `memory.oom.group` / `OOMPolicy=`：殺一個 vs 整組殺，直接影響你 log 看到的數量。
+
+**為什麼不用 Graylog**：OOM 事件很稀疏（一天個位數），扛 Elasticsearch+MongoDB 違反「最小依賴」。journald→SQLite 跟既有 collector 同 DB、同 ethos。
+
+**已知會被往後挪的 k8s 風格強化**（缺口分析見 [`k8s-adoption-analysis.zh-tw.md`](k8s-adoption-analysis.zh-tw.md) §5）：`memory_low` 保留下限、service 分級（QoS）、PSI 自動化（`psi-responder.py`）。
+
+> 註：本專案做的是 k8s 沒做的「baseline→規則」反推；CPU 只設 weight 不設 quota 與 k8s「set requests, not limits」最佳實務一致，刻意保留。
+
+- **全 fleet rollout**（如果 canary + round 1 都健康）
 
 ---
 

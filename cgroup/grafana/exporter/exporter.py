@@ -8,6 +8,8 @@ Listen address: env CGROUP_EXPORTER_LISTEN (default 127.0.0.1:9753).
 Intended to be reached via SSH reverse tunnel from a laptop running Prometheus.
 """
 import os
+import pwd
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -85,6 +87,38 @@ def discover_cgroups():
 # === END COPY ===
 
 
+# user.slice children are named "user-<uid>.slice". Resolve the UID to a login
+# name for display; fall back to "user-<uid>" when the account has no passwd entry
+# (e.g. a logged-out UID still lingering, or an LDAP user not resolvable here).
+USER_SLICE_RE = re.compile(r"^user-(\d+)\.slice$")
+
+
+def user_slice_uid(cg_name):
+    """Return the int UID if cg_name is a user-<uid>.slice, else None."""
+    m = USER_SLICE_RE.match(cg_name)
+    return int(m.group(1)) if m else None
+
+
+def display_service(cg_name):
+    """Map a cgroup leaf name to its display label.
+
+    user-<uid>.slice -> the account's login name (or "user-<uid>" if unresolvable).
+    Everything else (system.slice services/scopes) is returned unchanged.
+    """
+    uid = user_slice_uid(cg_name)
+    if uid is None:
+        return cg_name
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return f"user-{uid}"
+
+
+def count_login_sessions(cg):
+    """Number of login sessions under a user slice = its session-*.scope children."""
+    return sum(1 for p in cg.glob("session-*.scope") if p.is_dir())
+
+
 # Metric schema — (prom_name, kind, help_text). kind: gauge|counter.
 # Counter names already include the _total suffix per Prometheus convention.
 GAUGES = [
@@ -92,6 +126,8 @@ GAUGES = [
     ("cgroup_memory_peak_bytes", "Peak memory usage in bytes."),
     ("cgroup_memory_max_bytes", "Hard memory limit in bytes (omitted when 'max')."),
     ("cgroup_memory_high_bytes", "Soft memory limit in bytes (omitted when 'max')."),
+    ("cgroup_memory_anon_bytes", "Anonymous memory in bytes (heap/stack; not reclaimable without swap)."),
+    ("cgroup_memory_file_bytes", "Page cache in bytes (reclaimable; charged to the first toucher)."),
     ("cgroup_psi_cpu_some_avg10", "CPU PSI some avg10 (% time at least one task stalled)."),
     ("cgroup_psi_cpu_some_avg60", "CPU PSI some avg60."),
     ("cgroup_psi_cpu_full_avg10", "CPU PSI full avg10 (% time all tasks stalled)."),
@@ -104,6 +140,7 @@ GAUGES = [
     ("cgroup_psi_io_some_avg60", "IO PSI some avg60."),
     ("cgroup_psi_io_full_avg10", "IO PSI full avg10."),
     ("cgroup_psi_io_full_avg60", "IO PSI full avg60."),
+    ("cgroup_user_login_sessions", "Number of login sessions (session-*.scope) under a user slice."),
 ]
 COUNTERS = [
     ("cgroup_cpu_usage_usec_total", "Cumulative CPU usage in microseconds."),
@@ -120,14 +157,21 @@ COUNTERS = [
     ("cgroup_memory_events_max_total", "memory.events: max boundary breaches."),
     ("cgroup_memory_events_oom_total", "memory.events: OOM events."),
     ("cgroup_memory_events_oom_kill_total", "memory.events: OOM kills."),
+    ("cgroup_memory_workingset_refault_file_total", "Previously-hot file pages evicted then read back (thrashing signal)."),
+    ("cgroup_memory_pgscan_total", "Pages scanned for reclaim (all paths)."),
+    ("cgroup_memory_pgscan_kswapd_total", "Pages scanned by background reclaim (global memory pressure)."),
+    ("cgroup_memory_pgscan_direct_total", "Pages scanned by direct reclaim (cgroup hit its own memory.high/max)."),
+    ("cgroup_memory_pgsteal_total", "Pages actually reclaimed."),
 ]
 
 
 def sample_one(cg):
     """Return dict keyed by Prometheus metric name. Values may be None — skipped on emit."""
     name = str(cg.relative_to(CGROUP_ROOT))
-    service = cg.name
+    is_user = user_slice_uid(cg.name) is not None
+    service = display_service(cg.name)
     m_events = read_kv(cg / "memory.events")
+    m_stat = read_kv(cg / "memory.stat")
     cpu_stat = read_kv(cg / "cpu.stat")
     m_psi = read_pressure(cg / "memory.pressure")
     c_psi = read_pressure(cg / "cpu.pressure")
@@ -140,10 +184,22 @@ def sample_one(cg):
 
     return {
         "_labels": {"cgroup": name, "service": service},
+        "_is_user": is_user,
+        "cgroup_user_login_sessions": count_login_sessions(cg) if is_user else None,
         "cgroup_memory_current_bytes": read_int(cg / "memory.current"),
         "cgroup_memory_peak_bytes": read_int(cg / "memory.peak"),
         "cgroup_memory_max_bytes": read_int(cg / "memory.max"),
         "cgroup_memory_high_bytes": read_int(cg / "memory.high"),
+        "cgroup_memory_anon_bytes": m_stat.get("anon"),
+        "cgroup_memory_file_bytes": m_stat.get("file"),
+        # workingset_refault_file / pgscan_{kswapd,direct} exist since kernel 5.9;
+        # older kernels (RHEL8 4.18) only have unsplit workingset_refault / pgscan.
+        "cgroup_memory_workingset_refault_file_total":
+            m_stat.get("workingset_refault_file", m_stat.get("workingset_refault")),
+        "cgroup_memory_pgscan_total": m_stat.get("pgscan"),
+        "cgroup_memory_pgscan_kswapd_total": m_stat.get("pgscan_kswapd"),
+        "cgroup_memory_pgscan_direct_total": m_stat.get("pgscan_direct"),
+        "cgroup_memory_pgsteal_total": m_stat.get("pgsteal"),
         "cgroup_psi_cpu_some_avg10": c_psi.get("some_avg10"),
         "cgroup_psi_cpu_some_avg60": c_psi.get("some_avg60"),
         "cgroup_psi_cpu_full_avg10": c_psi.get("full_avg10"),
@@ -200,6 +256,13 @@ def render_metrics(samples):
             cg = escape_label_value(s["_labels"]["cgroup"])
             svc = escape_label_value(s["_labels"]["service"])
             out.append(f'{metric}{{cgroup="{cg}",service="{svc}"}} {v}')
+    # Host-level gauge: how many user accounts are currently logged in, i.e. how
+    # many user-*.slice exist on this OS right now. No labels — one value per host;
+    # Prometheus attaches the instance label at scrape time.
+    n_users = sum(1 for s in samples if s.get("_is_user"))
+    out.append("# HELP cgroup_logged_in_users Number of user accounts currently logged in (user-*.slice present).")
+    out.append("# TYPE cgroup_logged_in_users gauge")
+    out.append(f"cgroup_logged_in_users {n_users}")
     out.append("")
     return "\n".join(out)
 

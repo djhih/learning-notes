@@ -1,7 +1,11 @@
 #!/bin/bash
 # monitor.sh — interactive baseline monitor.
-# Password held in process memory only (env var SSHPASS).
-# Recommended: run inside tmux so polling survives terminal close.
+#
+# No sshpass / no SSH key / no sudo required: uses SSH connection multiplexing
+# (ControlMaster). One master connection is opened up front — you type the
+# password once — and every poll/fetch in the loop reuses that socket without
+# re-authenticating. If the master drops, the loop re-establishes it (prompts
+# again). Run inside tmux so polling survives terminal close.
 #
 # Usage:
 #   tmux new -s monitor
@@ -26,26 +30,52 @@ LOG="$LOG_DIR/poll.log"
 
 mkdir -p "$DATA_DIR" "$LOG_DIR"
 
-# Prereqs
-if ! command -v sshpass &>/dev/null; then
-  echo "ERROR: sshpass not installed."
-  echo "  Ubuntu/Debian: sudo apt install sshpass"
-  echo "  Fedora/RHEL:   sudo dnf install sshpass"
-  exit 1
-fi
+# --- SSH connection multiplexing ------------------------------------------
+# CTL is the control socket. Clients reuse the master via ControlPath and
+# never authenticate themselves (ControlMaster=no), so no per-call password.
+CTL="${SSH_CTL:-$LOG_DIR/ssh-ctl}"
+# Options for reusing the master (poll/fetch calls).
+SSH_REUSE=(-o "ControlPath=$CTL" -o ControlMaster=no -o BatchMode=yes \
+           -o StrictHostKeyChecking=accept-new)
 
-# Prompt for password (no echo, won't enter bash history)
-read -rs -p "Password for $SERVER: " SSHPASS
-echo
-export SSHPASS
-
-# Quick connection test
-echo -n "Testing SSH... "
-if ! sshpass -e ssh -o StrictHostKeyChecking=accept-new \
-       -o ConnectTimeout=10 -o BatchMode=no \
-       "$SERVER" 'echo ok' >/dev/null 2>&1; then
+establish_master() {
+  # Opens the master connection. Prompts for the password (foreground), then
+  # backgrounds (-f). ControlPersist keeps it alive for the loop's reuse.
+  echo -n "Connecting to $SERVER (enter password once)... "
+  if ssh -fNMT \
+       -o "ControlPath=$CTL" \
+       -o ControlPersist=yes \
+       -o StrictHostKeyChecking=accept-new \
+       -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+       -o ConnectTimeout=10 \
+       "$SERVER"; then
+    echo "OK"
+    return 0
+  fi
   echo "FAILED (wrong password / unreachable)"
-  unset SSHPASS
+  return 1
+}
+
+master_alive() { ssh -O check -o "ControlPath=$CTL" "$SERVER" 2>/dev/null; }
+
+ensure_master() {
+  # Re-open the master if it has died. Returns non-zero only if it can't.
+  master_alive || establish_master
+}
+
+close_master() {
+  ssh -O exit -o "ControlPath=$CTL" "$SERVER" 2>/dev/null || true
+  rm -f "$CTL"
+}
+
+# Clean up the master connection on exit.
+trap 'close_master; echo "Exiting, SSH master closed."' EXIT
+
+# Open master + sanity check (reuses it, so no second password).
+establish_master || exit 1
+echo -n "Testing reused connection... "
+if ! ssh "${SSH_REUSE[@]}" "$SERVER" 'echo ok' >/dev/null 2>&1; then
+  echo "FAILED (master not usable)"
   exit 1
 fi
 echo "OK"
@@ -61,15 +91,19 @@ echo ""
 last_rows=""
 last_fetch=0
 
-# Trap to clean up env var on exit
-trap 'unset SSHPASS; echo "Exiting, env var cleared."' EXIT
-
 # Main loop
 while true; do
   ts=$(date -Iseconds)
 
-  # Health check via Python on remote (single-shot, no persistent session)
-  output=$(sshpass -e ssh -o StrictHostKeyChecking=accept-new \
+  # Re-establish the master if it dropped (prompts only when truly dead).
+  if ! ensure_master; then
+    echo "$ts  FAIL  ssh master down, retrying next poll" | tee -a "$LOG"
+    sleep "$POLL_INTERVAL"
+    continue
+  fi
+
+  # Health check via Python on remote (single-shot, reuses master session)
+  output=$(ssh "${SSH_REUSE[@]}" \
     "$SERVER" "python3 -c '
 import sqlite3, os, sys
 p = \"$DB_PATH\"
@@ -111,11 +145,11 @@ except Exception as e:
   fi
   echo "$line" | tee -a "$LOG"
 
-  # Periodic DB fetch
+  # Periodic DB fetch (scp reuses the same master connection)
   now=$(date +%s)
   if [ $((now - last_fetch)) -ge "$FETCH_INTERVAL" ]; then
     snap="$DATA_DIR/samples-$(date +%Y%m%d-%H%M).db"
-    if sshpass -e scp -q -o StrictHostKeyChecking=accept-new \
+    if scp -q "${SSH_REUSE[@]}" \
          "$SERVER:$DB_PATH" "$snap" 2>>"$LOG"; then
       size=$(stat -c '%s' "$snap" 2>/dev/null)
       echo "$ts  FETCH  -> $snap ($size bytes)" | tee -a "$LOG"

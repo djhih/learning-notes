@@ -3,8 +3,11 @@
 # (in docker-compose) can scrape the target's cgroup-exporter bound to
 # 127.0.0.1:9753 on the remote.
 #
-# Password held in process memory only (env var SSHPASS).
-# Recommended: run inside tmux so the tunnel survives terminal close.
+# No sshpass / no SSH key required: ssh prompts for the password interactively.
+# The tunnel is a single long-lived connection, so you only type it once per
+# connect. Run inside tmux so the tunnel survives terminal close.
+# (If the link drops, the reconnect loop runs ssh again and it will prompt
+#  again — reattach the tmux session to type the password.)
 #
 # Usage:
 #   tmux new -s cgroup-tunnel
@@ -35,27 +38,16 @@ if [ -z "$SERVER" ]; then
   exit 1
 fi
 
-if ! command -v sshpass &>/dev/null; then
-  echo "ERROR: sshpass not installed." >&2
-  echo "  Ubuntu/Debian: sudo apt install sshpass" >&2
-  echo "  Fedora/RHEL:   sudo dnf install sshpass" >&2
-  exit 1
-fi
-
-read -rs -p "Password for ${USER_AT}@${SERVER}: " SSHPASS
-echo
-export SSHPASS
-
-trap 'unset SSHPASS; echo "Tunnel closed, env var cleared."' EXIT
-
 echo "Forwarding ${LOCAL_BIND}:${LOCAL_PORT} -> ${USER_AT}@${SERVER}:127.0.0.1:${REMOTE_PORT}"
 echo "Prometheus (in docker) reaches it via host.docker.internal:${LOCAL_PORT}"
+echo "You'll be asked for ${USER_AT}@${SERVER}'s password on each (re)connect."
 echo "Press Ctrl-C to stop."
 
 # Loop so a transient drop reconnects automatically. ServerAlive keeps
-# NAT/firewall mappings warm.
+# NAT/firewall mappings warm. ssh prompts for the password interactively
+# (no sshpass) — fine because there is only one connection to authenticate.
 while true; do
-  sshpass -e ssh \
+  ssh \
     -o StrictHostKeyChecking=accept-new \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \

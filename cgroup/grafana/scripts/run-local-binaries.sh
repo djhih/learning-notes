@@ -169,25 +169,27 @@ start grafana    "$LOGS/grafana.log" \
       "$GRAF_BIN" "${GRAF_ARGS[@]}" --homepath "$GRAF_DIR"
 
 # --- wait for readiness + report ---
+# --noproxy '*' so a corporate http_proxy/https_proxy env var doesn't send our
+# 127.0.0.1 probes off to a proxy (a classic "service is up but readiness fails")
 echo -n "==> waiting for stack to be ready (tail -f $LOGS/*.log to watch)"
 ready=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 60); do
   # if any process died during startup, stop waiting and show why
   for p in "${pids[@]}"; do
     if ! alive "$p"; then
       echo; echo "!! 有 process 在啟動中掛掉了，看 log："; tail -n 25 "$LOGS"/*.log; exit 1
     fi
   done
-  if curl -sf --max-time 2 http://127.0.0.1:3000/api/health >/dev/null 2>&1 \
-     && curl -sf --max-time 2 http://127.0.0.1:9090/-/ready  >/dev/null 2>&1; then
+  if curl -sf --noproxy '*' --max-time 2 http://127.0.0.1:3000/api/health >/dev/null 2>&1 \
+     && curl -sf --noproxy '*' --max-time 2 http://127.0.0.1:9090/-/ready  >/dev/null 2>&1; then
     ready=1; break
   fi
   echo -n "."; sleep 1
 done
 echo
-[ "$ready" = 1 ] || echo "!! 等了 30s 還沒 ready，但 process 都還活著 — 看 $LOGS/*.log 找原因"
+[ "$ready" = 1 ] || echo "!! 等了 60s 還沒 ready，但 process 都還活著 — 多半是服務其實好了只是探測沒過（proxy？）。直接開瀏覽器試 http://127.0.0.1:3000 ，或看 $LOGS/*.log"
 
-prom_target=$(curl -s --max-time 3 http://127.0.0.1:9090/api/v1/targets 2>/dev/null \
+prom_target=$(curl -s --noproxy '*' --max-time 3 http://127.0.0.1:9090/api/v1/targets 2>/dev/null \
   | grep -o '"health":"[^"]*"' | head -1)
 echo "----------------------------------------------------------------"
 echo "  Grafana:     http://127.0.0.1:3000   (admin / $GRAFANA_ADMIN_PASSWORD)"
