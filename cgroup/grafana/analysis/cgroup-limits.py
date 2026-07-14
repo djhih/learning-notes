@@ -29,7 +29,7 @@ import urllib.request
 ANALYZE_NAME = "cgroup-analyze"
 
 
-# ---------- shell / docker ----------
+# shell / docker
 def run(cmd, **kw):
     return subprocess.run(cmd, text=True, capture_output=True, **kw)
 
@@ -43,10 +43,10 @@ def docker(args, check=True):
 
 def have_docker():
     if run(["docker", "version"]).returncode != 0:
-        sys.exit("!! 需要可用的 docker(且你的帳號要能跑 docker,例如在 docker 群組)。")
+        sys.exit("!! docker not available (is your user in the docker group?)")
 
 
-# ---------- http ----------
+# http
 def api(base, path, params=None):
     url = base + path + (("?" + urllib.parse.urlencode(params)) if params else "")
     with urllib.request.urlopen(url, timeout=60) as r:
@@ -59,12 +59,12 @@ def q(base, expr, at):
         params["time"] = at
     d = api(base, "/api/v1/query", params)
     if d.get("status") != "success":
-        print(f"!! 查詢失敗: {expr}\n   {d}", file=sys.stderr)
+        print(f"!! query failed: {expr}\n   {d}", file=sys.stderr)
         return []
     return [(r["metric"], float(r["value"][1])) for r in d["data"]["result"]]
 
 
-# ---------- step 1: pull data ----------
+# step 1: pull data
 def detect_source():
     for filt in ("publish=9090", "name=prometheus"):
         for line in docker(["ps", "--filter", filt, "--format", "{{.ID}} {{.Names}}"]).splitlines():
@@ -100,24 +100,24 @@ def fresh_dir(base):
 def pull(source, workdir):
     cid, name = (source, source) if source else detect_source()
     if not cid:
-        sys.exit("!! 找不到來源 Prometheus 容器。用 --source <容器名> 指定,或 --data <資料夾> 跳過抓取。")
+        sys.exit("!! Prometheus not found. use --source <container>, or --data <dir> to skip the pull.")
     path = tsdb_path(cid)
-    print(f"==> 來源容器: {name} ({cid[:12]})  TSDB: {path}")
+    print(f"==> source: {name} ({cid[:12]})  TSDB: {path}")
     size = run(["docker", "exec", cid, "du", "-sh", path]).stdout.strip()
     if size:
-        print(f"    資料大小: {size}")
+        print(f"    size: {size}")
     datadir = fresh_dir(os.path.join(workdir, "data"))
-    print(f"==> 複製資料到 {datadir} ...")
+    print(f"==> copying data to {datadir} ...")
     r = run(["docker", "cp", f"{cid}:{path}/.", datadir])
     if r.returncode != 0:
-        sys.exit(f"!! docker cp 失敗:\n{r.stderr.strip()}")
+        sys.exit(f"!! docker cp failed:\n{r.stderr.strip()}")
     return datadir
 
 
 # ---------- step 2: serve ----------
 def serve(datadir, port, image):
     docker(["rm", "-f", ANALYZE_NAME], check=False)
-    print(f"==> 啟動分析用 Prometheus @ http://localhost:{port}(retention 設超大,不刪資料)")
+    print(f"==> starting analysis Prometheus @ http://localhost:{port} (huge retention, nothing pruned)")
     docker([
         "run", "-d", "--name", ANALYZE_NAME,
         "--user", os.environ.get("PUID", "0:0"),   # run as root so mount perms never block writes
@@ -130,7 +130,7 @@ def serve(datadir, port, image):
         "--storage.tsdb.retention.size=0",
     ])
     base = f"http://localhost:{port}"
-    print("==> 等待就緒", end="", flush=True)
+    print("==> waiting for ready", end="", flush=True)
     for _ in range(60):
         try:
             with urllib.request.urlopen(base + "/-/ready", timeout=2) as r:
@@ -142,7 +142,7 @@ def serve(datadir, port, image):
         print(".", end="", flush=True)
         time.sleep(1)
     print()
-    sys.exit("!! 分析用 Prometheus 沒起來。log:\n" + docker(["logs", "--tail", "25", ANALYZE_NAME], check=False))
+    sys.exit("!! analysis Prometheus did not start. logs:\n" + docker(["logs", "--tail", "25", ANALYZE_NAME], check=False))
 
 
 # ---------- step 3: analyse ----------
@@ -178,12 +178,12 @@ def analyze(base, label, window, at=0):
     L, W = label, window
     at = at or detect_at(base)  # default: newest sample in the snapshot
     if at:
-        print(f"==> 評估時間鎖定 at={at}(資料最新時間)")
+        print(f"==> eval time at={at} (newest sample)")
 
     names = api(base, "/api/v1/label/__name__/values")["data"]
     have = set(n for n in names if n.startswith("cgroup_"))
     if "cgroup_memory_current_bytes" not in have:
-        sys.exit("!! 資料裡沒有 cgroup_memory_current_bytes,無法分析。")
+        sys.exit("!! cgroup_memory_current_bytes missing; cannot analyse.")
     io_metrics = sorted(n for n in have if "io_" in n and "bytes" in n)
 
     # Collapse instance with max by(<label>): one row per user, taking the
@@ -205,7 +205,7 @@ def analyze(base, label, window, at=0):
 
     users = sorted(set(mem_peak) | set(cpu_p95) | set(io_p95))
     if not users:
-        sys.exit("!! 查不到資料。可能 --window 太短(資料在更早以前)或 --label 名稱不對。")
+        sys.exit("!! no data. --window may be too short, or --label is wrong.")
 
     rows = []
     for u in users:
@@ -261,17 +261,17 @@ def write_csv(rows, out):
 
 # ---------- main ----------
 def main():
-    p = argparse.ArgumentParser(description="cgroup 用量分析:抓資料→起 Prometheus→分析,一鍵完成")
-    p.add_argument("--source", help="來源 docker Prometheus 容器名/ID(預設自動偵測發布 9090 的容器)")
-    p.add_argument("--data", help="改用現有 TSDB 資料夾,跳過 docker cp 抓取")
-    p.add_argument("--workdir", default="./cgroup-analysis", help="工作目錄(放抓下來的資料與輸出)")
+    p = argparse.ArgumentParser(description="cgroup usage analysis: pull data, start Prometheus, analyse — one shot")
+    p.add_argument("--source", help="source Prometheus container name/ID (default: auto-detect the one publishing 9090)")
+    p.add_argument("--data", help="use an existing TSDB dir, skip docker cp")
+    p.add_argument("--workdir", default="./cgroup-analysis", help="work dir for pulled data and output")
     p.add_argument("--port", type=int, default=9091)
     p.add_argument("--image", default="prom/prometheus:v2.55.1")
-    p.add_argument("--label", default="service", help="辨識 user 的 label")
+    p.add_argument("--label", default="service", help="label identifying a user")
     p.add_argument("--window", default="15d")
-    p.add_argument("--at", type=int, default=0, help="評估時間 unix 秒;0=自動抓資料最新時間")
-    p.add_argument("--out", help="CSV 輸出路徑(預設 <workdir>/cgroup_limits.csv)")
-    p.add_argument("--keep", action="store_true", help="分析完保留分析用容器(預設收掉)")
+    p.add_argument("--at", type=int, default=0, help="eval time (unix seconds); 0 = auto (newest sample)")
+    p.add_argument("--out", help="CSV output path (default <workdir>/cgroup_limits.csv)")
+    p.add_argument("--keep", action="store_true", help="keep the analysis container afterwards (default: remove)")
     a = p.parse_args()
 
     have_docker()
@@ -281,7 +281,7 @@ def main():
     # 1. data
     if a.data:
         datadir = os.path.abspath(a.data)
-        print(f"==> 使用現有資料夾: {datadir}")
+        print(f"==> using existing dir: {datadir}")
     else:
         datadir = pull(a.source, a.workdir)
 
@@ -294,18 +294,18 @@ def main():
         print()
         render(rows)
         write_csv(rows, out)
-        print(f"\n共 {len(rows)} 列  →  {out}")
+        print(f"\n{len(rows)} rows  →  {out}")
         if not io_metrics:
-            print("註:無 io bytes metric(舊版 exporter),IO 僅給 IOWeight。", file=sys.stderr)
-        print("提醒:數值為『跨 host 最大』的全機通用值,對用量小的 host 會偏鬆;"
-              "MemoryMax/CPUQuota 是硬限制,套用前先複核並在 canary 上驗證 OOM=0、PSI 不爆。",
+            print("note: no io bytes metric (old exporter); IO is IOWeight only.", file=sys.stderr)
+        print("note: values are cross-host max (fleet-wide, loose on small hosts). "
+              "MemoryMax/CPUQuota are hard limits — review, then verify OOM=0 and PSI on a canary first.",
               file=sys.stderr)
     finally:
         if a.keep:
-            print(f"\n(分析用容器保留: {ANALYZE_NAME} @ {base};停用: docker rm -f {ANALYZE_NAME})")
+            print(f"\n(analysis container kept: {ANALYZE_NAME} @ {base}; stop with: docker rm -f {ANALYZE_NAME})")
         else:
             docker(["rm", "-f", ANALYZE_NAME], check=False)
-            print(f"\n==> 已收掉分析用容器 {ANALYZE_NAME}(抓下來的資料保留在 {datadir})")
+            print(f"\n==> removed analysis container {ANALYZE_NAME} (data kept in {datadir})")
 
 
 if __name__ == "__main__":
