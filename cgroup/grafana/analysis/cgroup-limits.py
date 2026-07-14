@@ -4,7 +4,7 @@ cgroup-limits.py — end-to-end cgroup usage analysis in one program.
 
   1. Pull the TSDB out of the source Prometheus container (docker cp).
   2. Spin up a throwaway analysis Prometheus on that copy (default port 9091).
-  3. Analyse: per-user cross-host max usage + suggested systemd limits,
+  3. Analyse: per-host, per-user usage + suggested systemd limits,
      print a table and write a CSV. The container is torn down afterwards
      (use --keep to retain it).
 
@@ -114,7 +114,7 @@ def pull(source, workdir):
     return datadir
 
 
-# ---------- step 2: serve ----------
+# step 2: serve 
 def serve(datadir, port, image):
     docker(["rm", "-f", ANALYZE_NAME], check=False)
     print(f"==> starting analysis Prometheus @ http://localhost:{port} (huge retention, nothing pruned)")
@@ -145,7 +145,7 @@ def serve(datadir, port, image):
     sys.exit("!! analysis Prometheus did not start. logs:\n" + docker(["logs", "--tail", "25", ANALYZE_NAME], check=False))
 
 
-# ---------- step 3: analyse ----------
+# step 3: analyse
 def detect_at(base):
     # Snapshot data is static, so "now" is usually empty — evaluate at the
     # newest sample instead (TSDB head max time).
@@ -157,8 +157,9 @@ def detect_at(base):
         return None
 
 
-def keyed(rows, label):
-    return {m.get(label, "?"): v for m, v in rows}
+def keyed(rows, labels):
+    # key each series by the given label tuple, e.g. (instance, service)
+    return {tuple(m.get(l, "?") for l in labels): v for m, v in rows}
 
 
 def h_bytes(n):
@@ -174,8 +175,8 @@ def mib(n):
     return f"{max(0, round(float(n) / 2**20))}M"
 
 
-def analyze(base, label, window, at=0):
-    L, W = label, window
+def analyze(base, host_label, user_label, window, at=0):
+    H, L, W = host_label, user_label, window
     at = at or detect_at(base)  # default: newest sample in the snapshot
     if at:
         print(f"==> eval time at={at} (newest sample)")
@@ -186,47 +187,44 @@ def analyze(base, label, window, at=0):
         sys.exit("!! cgroup_memory_current_bytes missing; cannot analyse.")
     io_metrics = sorted(n for n in have if "io_" in n and "bytes" in n)
 
-    # Collapse instance with max by(<label>): one row per user, taking the
-    # largest usage across hosts — a single fleet-wide limit.
-    def agg(inner):
-        return f"max by ({L}) ({inner})"
-
-    mem_peak = keyed(q(base, agg(f"max_over_time(cgroup_memory_current_bytes[{W}])"), at), L)
-    mem_p95 = keyed(q(base, agg(f"quantile_over_time(0.95, cgroup_memory_current_bytes[{W}])"), at), L)
-    mem_p50 = keyed(q(base, agg(f"quantile_over_time(0.50, cgroup_memory_current_bytes[{W}])"), at), L)
-    cpu_p95 = keyed(q(base, agg(f"quantile_over_time(0.95, rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6"), at), L)
-    cpu_peak = keyed(q(base, agg(f"max_over_time(rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6"), at), L)
+    # One row per (host, user): each host is sized from its own usage, no merging.
+    by = (H, L)
+    mem_peak = keyed(q(base, f"max_over_time(cgroup_memory_current_bytes[{W}])", at), by)
+    mem_p95 = keyed(q(base, f"quantile_over_time(0.95, cgroup_memory_current_bytes[{W}])", at), by)
+    mem_p50 = keyed(q(base, f"quantile_over_time(0.50, cgroup_memory_current_bytes[{W}])", at), by)
+    cpu_p95 = keyed(q(base, f"quantile_over_time(0.95, rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6", at), by)
+    cpu_peak = keyed(q(base, f"max_over_time(rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6", at), by)
 
     io_p95, io_peak = {}, {}
     if io_metrics:  # older exporters have no io bytes metric
         rate_sum = " + ".join(f"rate({m}[5m])" for m in io_metrics)
-        io_p95 = keyed(q(base, agg(f"quantile_over_time(0.95, ({rate_sum})[{W}:5m])"), at), L)
-        io_peak = keyed(q(base, agg(f"max_over_time(({rate_sum})[{W}:5m])"), at), L)
+        io_p95 = keyed(q(base, f"quantile_over_time(0.95, ({rate_sum})[{W}:5m])", at), by)
+        io_peak = keyed(q(base, f"max_over_time(({rate_sum})[{W}:5m])", at), by)
 
-    users = sorted(set(mem_peak) | set(cpu_p95) | set(io_p95))
-    if not users:
+    idx = sorted(set(mem_peak) | set(cpu_p95) | set(io_p95))
+    if not idx:
         sys.exit("!! no data. --window may be too short, or --label is wrong.")
 
     rows = []
-    for u in users:
-        mp, mk, m5, cpk = mem_p95.get(u, 0), mem_peak.get(u, 0), mem_p50.get(u, 0), cpu_peak.get(u, 0)
+    for k in idx:  # k = (host, user)
+        mp, mk, m5, cpk = mem_p95.get(k, 0), mem_peak.get(k, 0), mem_p50.get(k, 0), cpu_peak.get(k, 0)
         row = {
-            L: u,
+            H: k[0], L: k[1],
             # observed usage
             "mem_p95": h_bytes(mp), "mem_peak": h_bytes(mk),
-            "cpu_p95_cores": round(cpu_p95.get(u, 0), 2), "cpu_peak_cores": round(cpk, 2),
+            "cpu_p95_cores": round(cpu_p95.get(k, 0), 2), "cpu_peak_cores": round(cpk, 2),
             # suggested limits: High=p95 (soft), Max=peak*1.3 (hard), Low=p50 (protected floor)
             "MemoryHigh": mib(mp), "MemoryMax": mib(mk * 1.3), "MemoryLow": mib(m5),
             "CPUWeight": 100, "CPUQuota": f"{max(1, round(cpk * 1.2 * 100))}%", "IOWeight": 100,
         }
         if io_metrics:
-            row["io_p95"] = h_bytes(io_p95.get(u, 0)) + "/s"
-            row["io_peak"] = h_bytes(io_peak.get(u, 0)) + "/s"
+            row["io_p95"] = h_bytes(io_p95.get(k, 0)) + "/s"
+            row["io_peak"] = h_bytes(io_peak.get(k, 0)) + "/s"
         rows.append(row)
     return rows, io_metrics
 
 
-# ---------- output ----------
+# output
 def render(rows):
     cols = list(rows[0].keys())
     data = [[str(r[c]) for c in cols] for r in rows]
@@ -250,6 +248,14 @@ def render(rows):
     print(border("└", "┴", "┘"))
 
 
+def render_by_host(rows, host_label):
+    # one table per host; drop the host column since the heading shows it
+    for h in sorted({r[host_label] for r in rows}):
+        sub = [{k: v for k, v in r.items() if k != host_label} for r in rows if r[host_label] == h]
+        print(f"\n=== {host_label} = {h} ({len(sub)} users) ===")
+        render(sub)
+
+
 def write_csv(rows, out):
     import csv
     cols = list(rows[0].keys())
@@ -259,7 +265,7 @@ def write_csv(rows, out):
         w.writerows(rows)
 
 
-# ---------- main ----------
+# main
 def main():
     p = argparse.ArgumentParser(description="cgroup usage analysis: pull data, start Prometheus, analyse — one shot")
     p.add_argument("--source", help="source Prometheus container name/ID (default: auto-detect the one publishing 9090)")
@@ -268,6 +274,7 @@ def main():
     p.add_argument("--port", type=int, default=9091)
     p.add_argument("--image", default="prom/prometheus:v2.55.1")
     p.add_argument("--label", default="service", help="label identifying a user")
+    p.add_argument("--host-label", default="instance", help="label identifying a host")
     p.add_argument("--window", default="15d")
     p.add_argument("--at", type=int, default=0, help="eval time (unix seconds); 0 = auto (newest sample)")
     p.add_argument("--out", help="CSV output path (default <workdir>/cgroup_limits.csv)")
@@ -290,14 +297,13 @@ def main():
 
     # 3. analyse (always tear the container down unless --keep)
     try:
-        rows, io_metrics = analyze(base, a.label, a.window, a.at)
-        print()
-        render(rows)
+        rows, io_metrics = analyze(base, a.host_label, a.label, a.window, a.at)
+        render_by_host(rows, a.host_label)
         write_csv(rows, out)
         print(f"\n{len(rows)} rows  →  {out}")
         if not io_metrics:
             print("note: no io bytes metric (old exporter); IO is IOWeight only.", file=sys.stderr)
-        print("note: values are cross-host max (fleet-wide, loose on small hosts). "
+        print("note: one row per (host, user); each host is sized from its own usage. "
               "MemoryMax/CPUQuota are hard limits — review, then verify OOM=0 and PSI on a canary first.",
               file=sys.stderr)
     finally:
