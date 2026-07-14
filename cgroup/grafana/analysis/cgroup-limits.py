@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-cgroup-limits.py — 一支程式跑完整流程:
+cgroup-limits.py — end-to-end cgroup usage analysis in one program.
 
-  1) 從來源 docker Prometheus 容器把 TSDB 資料抓下來 (docker cp)
-  2) 用那份資料起一個「分析用 Prometheus」(docker,預設 port 9091)
-  3) 分析:算每個 user 跨 host 最大用量 + 建議 systemd 限制 → 印表 + 存 CSV
+  1. Pull the TSDB out of the source Prometheus container (docker cp).
+  2. Spin up a throwaway analysis Prometheus on that copy (default port 9091).
+  3. Analyse: per-user cross-host max usage + suggested systemd limits,
+     print a table and write a CSV. The container is torn down afterwards
+     (use --keep to retain it).
 
-分析完自動收掉分析用容器(--keep 可保留)。只依賴 Python 標準函式庫 + docker CLI。
+Stdlib + docker CLI only.
 
-範例:
-  python3 cgroup-limits.py                       # 自動偵測來源(發布 9090 的容器)
+Examples:
+  python3 cgroup-limits.py                       # auto-detect source (container publishing 9090)
   python3 cgroup-limits.py --source cgroup-prometheus
-  python3 cgroup-limits.py --data ./prometheus-data     # 已有資料夾,跳過抓取
+  python3 cgroup-limits.py --data ./prometheus-data     # reuse an existing dir, skip the copy
   python3 cgroup-limits.py --window 30d --label service --out limits.csv --keep
 """
 import argparse
@@ -62,7 +64,7 @@ def q(base, expr, at):
     return [(r["metric"], float(r["value"][1])) for r in d["data"]["result"]]
 
 
-# ---------- step 1: 抓資料 ----------
+# ---------- step 1: pull data ----------
 def detect_source():
     for filt in ("publish=9090", "name=prometheus"):
         for line in docker(["ps", "--filter", filt, "--format", "{{.ID}} {{.Names}}"]).splitlines():
@@ -73,6 +75,7 @@ def detect_source():
 
 
 def tsdb_path(cid):
+    # Read the actual data path from the container's args; fall back to /prometheus.
     for a in docker(["inspect", "--format", "{{range .Args}}{{println .}}{{end}}", cid]).splitlines():
         if a.startswith("--storage.tsdb.path="):
             return a.split("=", 1)[1]
@@ -80,7 +83,8 @@ def tsdb_path(cid):
 
 
 def fresh_dir(base):
-    """回一個空目錄:先試著清掉 base;清不掉(root 擁有的舊資料)就退到 base-1, base-2 ..."""
+    # Return an empty dir: wipe `base`, or fall back to base-1, base-2... if it's
+    # left root-owned from a previous run and can't be removed.
     d, i = base, 1
     while os.path.exists(d):
         try:
@@ -110,13 +114,13 @@ def pull(source, workdir):
     return datadir
 
 
-# ---------- step 2: 起分析用 Prometheus ----------
+# ---------- step 2: serve ----------
 def serve(datadir, port, image):
     docker(["rm", "-f", ANALYZE_NAME], check=False)
     print(f"==> 啟動分析用 Prometheus @ http://localhost:{port}(retention 設超大,不刪資料)")
     docker([
         "run", "-d", "--name", ANALYZE_NAME,
-        "--user", os.environ.get("PUID", "0:0"),   # root 跑,避免掛載資料夾權限問題
+        "--user", os.environ.get("PUID", "0:0"),   # run as root so mount perms never block writes
         "-p", f"127.0.0.1:{port}:9090",
         "-v", f"{os.path.abspath(datadir)}:/prometheus",
         image,
@@ -141,8 +145,10 @@ def serve(datadir, port, image):
     sys.exit("!! 分析用 Prometheus 沒起來。log:\n" + docker(["logs", "--tail", "25", ANALYZE_NAME], check=False))
 
 
-# ---------- step 3: 分析 ----------
+# ---------- step 3: analyse ----------
 def detect_at(base):
+    # Snapshot data is static, so "now" is usually empty — evaluate at the
+    # newest sample instead (TSDB head max time).
     try:
         hs = api(base, "/api/v1/status/tsdb")["data"].get("headStats", {})
         mt = int(hs.get("maxTime", 0))
@@ -168,9 +174,9 @@ def mib(n):
     return f"{max(0, round(float(n) / 2**20))}M"
 
 
-def analyze(base, label, window, at):
+def analyze(base, label, window, at=0):
     L, W = label, window
-    at = at or detect_at(base)
+    at = at or detect_at(base)  # default: newest sample in the snapshot
     if at:
         print(f"==> 評估時間鎖定 at={at}(資料最新時間)")
 
@@ -180,15 +186,19 @@ def analyze(base, label, window, at):
         sys.exit("!! 資料裡沒有 cgroup_memory_current_bytes,無法分析。")
     io_metrics = sorted(n for n in have if "io_" in n and "bytes" in n)
 
-    # 跨 host 取最大 → 全機通用限制(外層 max by(<label>) 收斂 instance)
-    agg = lambda inner: f"max by ({L}) ({inner})"
+    # Collapse instance with max by(<label>): one row per user, taking the
+    # largest usage across hosts — a single fleet-wide limit.
+    def agg(inner):
+        return f"max by ({L}) ({inner})"
+
     mem_peak = keyed(q(base, agg(f"max_over_time(cgroup_memory_current_bytes[{W}])"), at), L)
     mem_p95 = keyed(q(base, agg(f"quantile_over_time(0.95, cgroup_memory_current_bytes[{W}])"), at), L)
     mem_p50 = keyed(q(base, agg(f"quantile_over_time(0.50, cgroup_memory_current_bytes[{W}])"), at), L)
     cpu_p95 = keyed(q(base, agg(f"quantile_over_time(0.95, rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6"), at), L)
     cpu_peak = keyed(q(base, agg(f"max_over_time(rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6"), at), L)
+
     io_p95, io_peak = {}, {}
-    if io_metrics:
+    if io_metrics:  # older exporters have no io bytes metric
         rate_sum = " + ".join(f"rate({m}[5m])" for m in io_metrics)
         io_p95 = keyed(q(base, agg(f"quantile_over_time(0.95, ({rate_sum})[{W}:5m])"), at), L)
         io_peak = keyed(q(base, agg(f"max_over_time(({rate_sum})[{W}:5m])"), at), L)
@@ -202,8 +212,10 @@ def analyze(base, label, window, at):
         mp, mk, m5, cpk = mem_p95.get(u, 0), mem_peak.get(u, 0), mem_p50.get(u, 0), cpu_peak.get(u, 0)
         row = {
             L: u,
+            # observed usage
             "mem_p95": h_bytes(mp), "mem_peak": h_bytes(mk),
             "cpu_p95_cores": round(cpu_p95.get(u, 0), 2), "cpu_peak_cores": round(cpk, 2),
+            # suggested limits: High=p95 (soft), Max=peak*1.3 (hard), Low=p50 (protected floor)
             "MemoryHigh": mib(mp), "MemoryMax": mib(mk * 1.3), "MemoryLow": mib(m5),
             "CPUWeight": 100, "CPUQuota": f"{max(1, round(cpk * 1.2 * 100))}%", "IOWeight": 100,
         }
@@ -214,17 +226,18 @@ def analyze(base, label, window, at):
     return rows, io_metrics
 
 
-# ---------- 輸出 ----------
+# ---------- output ----------
 def render(rows):
     cols = list(rows[0].keys())
     data = [[str(r[c]) for c in cols] for r in rows]
     wid = [max(len(cols[i]), *(len(d[i]) for d in data)) for i in range(len(cols))]
 
-    def cell(t, i):
-        return t.ljust(wid[i]) if i == 0 else t.rjust(wid[i])
+    def cell(text, i):
+        # user column left-aligned, numeric/unit columns right-aligned
+        return text.ljust(wid[i]) if i == 0 else text.rjust(wid[i])
 
-    def border(l, m, r):
-        return l + m.join("─" * (wid[i] + 2) for i in range(len(cols))) + r
+    def border(left, mid, right):
+        return left + mid.join("─" * (wid[i] + 2) for i in range(len(cols))) + right
 
     def line(vals):
         return "│ " + " │ ".join(cell(vals[i], i) for i in range(len(cols))) + " │"
@@ -265,17 +278,17 @@ def main():
     os.makedirs(a.workdir, exist_ok=True)
     out = a.out or os.path.join(a.workdir, "cgroup_limits.csv")
 
-    # 1) 資料
+    # 1. data
     if a.data:
         datadir = os.path.abspath(a.data)
         print(f"==> 使用現有資料夾: {datadir}")
     else:
         datadir = pull(a.source, a.workdir)
 
-    # 2) 起 Prometheus
+    # 2. serve
     base = serve(datadir, a.port, a.image)
 
-    # 3) 分析
+    # 3. analyse (always tear the container down unless --keep)
     try:
         rows, io_metrics = analyze(base, a.label, a.window, a.at)
         print()
