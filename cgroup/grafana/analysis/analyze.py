@@ -3,6 +3,9 @@
 analyze.py — 算出每個 user/cgroup 的 memory / cpu / io 用量,並給出建議的
 systemd 限制值(MemoryHigh/Max/Low、CPUQuota/Weight、IOWeight)。
 
+用量為「跨 host 最大」:同一 user 取所有 host 中最保守(最大)的用量,
+產出一份可套用到全部機器的通用限制(外層 max by (<label>))。
+
 前提:先用 check-data.sh 把「複製出來的 /prometheus 資料夾」掛成本機 Prometheus
 (預設 http://localhost:9091),這支再對它查。
 
@@ -87,21 +90,26 @@ def main():
     # 舊版 exporter 可能沒有 io bytes;動態偵測
     io_metrics = sorted(n for n in have if "io_" in n and "bytes" in n)
 
+    # 跨 host 取最大 → 產「全機通用」限制:同一 user 在所有 host 中最保守(最大)的
+    # 用量。外層包 max by (<label>) (...) 把 instance 收斂掉,一個 user 一列。
+    # 對用量小的 host,限制會偏鬆(這是刻意的:一份設定要套所有機器)。
+    agg = lambda inner: f"max by ({L}) ({inner})"
+
     # 記憶體(bytes)
-    mem_peak = keyed(q(base, f"max_over_time(cgroup_memory_current_bytes[{W}])", at), L)
-    mem_p95 = keyed(q(base, f"quantile_over_time(0.95, cgroup_memory_current_bytes[{W}])", at), L)
-    mem_p50 = keyed(q(base, f"quantile_over_time(0.50, cgroup_memory_current_bytes[{W}])", at), L)
+    mem_peak = keyed(q(base, agg(f"max_over_time(cgroup_memory_current_bytes[{W}])"), at), L)
+    mem_p95 = keyed(q(base, agg(f"quantile_over_time(0.95, cgroup_memory_current_bytes[{W}])"), at), L)
+    mem_p50 = keyed(q(base, agg(f"quantile_over_time(0.50, cgroup_memory_current_bytes[{W}])"), at), L)
 
     # CPU(核心數)= rate(usec)/1e6
-    cpu_p95 = keyed(q(base, f"quantile_over_time(0.95, rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6", at), L)
-    cpu_peak = keyed(q(base, f"max_over_time(rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6", at), L)
+    cpu_p95 = keyed(q(base, agg(f"quantile_over_time(0.95, rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6"), at), L)
+    cpu_peak = keyed(q(base, agg(f"max_over_time(rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6"), at), L)
 
     # IO(bytes/s,讀+寫;沒有就跳過)
     io_p95, io_peak = {}, {}
     if io_metrics:
         rate_sum = " + ".join(f"rate({m}[5m])" for m in io_metrics)
-        io_p95 = keyed(q(base, f"quantile_over_time(0.95, ({rate_sum})[{W}:5m])", at), L)
-        io_peak = keyed(q(base, f"max_over_time(({rate_sum})[{W}:5m])", at), L)
+        io_p95 = keyed(q(base, agg(f"quantile_over_time(0.95, ({rate_sum})[{W}:5m])"), at), L)
+        io_peak = keyed(q(base, agg(f"max_over_time(({rate_sum})[{W}:5m])"), at), L)
 
     users = sorted(set(mem_peak) | set(cpu_p95) | set(io_p95))
     if not users:
@@ -149,7 +157,8 @@ def main():
     if not io_metrics:
         print("註:此資料沒有 io bytes metric(舊版 exporter)。IO 只能用 IOWeight 相對權重 + 看 io PSI,"
               "無法給絕對用量/上限。", file=sys.stderr)
-    print("提醒:MemoryMax/CPUQuota 是硬限制,套用前先人工複核,並先在一台 canary 上驗證 "
+    print("提醒:數值為『跨 host 最大』的全機通用值,對用量小的 host 會偏鬆。"
+          "MemoryMax/CPUQuota 是硬限制,套用前先人工複核,並先在一台 canary 上驗證 "
           "OOM=0、PSI 不爆。", file=sys.stderr)
 
 
