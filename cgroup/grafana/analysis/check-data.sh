@@ -36,6 +36,7 @@ else
   echo "==> 啟動 $NAME @ $BASE(retention 設超大,避免把你複製來的舊資料刪掉)"
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   docker run -d --name "$NAME" \
+    --user "${PUID:-0:0}" \
     -p "127.0.0.1:$PORT:9090" \
     -v "$DATA:/prometheus" \
     "$IMAGE" \
@@ -56,8 +57,8 @@ echo
 if [ "$ok" != 1 ]; then
   echo "!! 沒起來,log 尾巴:"
   docker logs --tail 30 "$NAME" 2>&1 | sed 's/^/   /'
-  echo "   最常見是掛載資料夾權限(container 內 Prometheus 是 uid 65534)。"
-  echo "   試: sudo chown -R 65534:65534 \"$DATA\"  後重跑。"
+  echo "   若是權限問題(container 寫不進資料夾),此版已用 --user 0:0(root)跑,"
+  echo "   通常可解;仍失敗時試 PUID=\$(id -u):\$(id -g) bash $0 \"$DATA\" 或看上面 log。"
   exit 1
 fi
 
