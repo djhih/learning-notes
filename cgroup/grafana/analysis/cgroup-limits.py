@@ -180,7 +180,7 @@ def mib(n):
     return f"{max(0, round(float(n) / 2**20))}M"
 
 
-def analyze(base, host_label, user_label, window, at=0, include=None, exclude=None):
+def analyze(base, host_label, user_label, window, at=0):
     H, L, W = host_label, user_label, window
     at = at or detect_at(base)  # default: newest sample in the snapshot
     if at:
@@ -213,17 +213,8 @@ def analyze(base, host_label, user_label, window, at=0, include=None, exclude=No
     if not idx:
         sys.exit("!! no data. --window may be too short, or --label is wrong.")
 
-    # Keep only real users: filter the user label (applied to rows, not the ceiling).
-    inc = re.compile(include) if include else None
-    exc = re.compile(exclude) if exclude else None
-
     rows = []
     for k in idx:  # k = (host, user)
-        user = k[1]
-        if inc and not inc.search(user):
-            continue
-        if exc and exc.search(user):
-            continue
         mp, mk, m5, cpk = mem_p95.get(k, 0), mem_peak.get(k, 0), mem_p50.get(k, 0), cpu_peak.get(k, 0)
         mem_max = mk * MEM_FACTOR
         cap = sys_mem.get((k[0],), 0) * SYS_FRAC   # host root-cgroup peak * 0.9
@@ -243,8 +234,6 @@ def analyze(base, host_label, user_label, window, at=0, include=None, exclude=No
             row["io_p95"] = h_bytes(io_p95.get(k, 0)) + "/s"
             row["io_peak"] = h_bytes(io_peak.get(k, 0)) + "/s"
         rows.append(row)
-    if not rows:
-        sys.exit("!! no rows after --include/--exclude filter.")
     return rows, io_metrics
 
 
@@ -278,6 +267,21 @@ def render_by_host(rows, host_label):
         sub = [{k: v for k, v in r.items() if k != host_label} for r in rows if r[host_label] == h]
         print(f"\n=== {host_label} = {h} ({len(sub)} users) ===")
         render(sub)
+
+
+def filter_rows(rows, label, include, exclude):
+    # keep only real users for the CSV; the on-screen tables stay unfiltered
+    inc = re.compile(include) if include else None
+    exc = re.compile(exclude) if exclude else None
+    out = []
+    for r in rows:
+        u = r.get(label, "")
+        if inc and not inc.search(u):
+            continue
+        if exc and exc.search(u):
+            continue
+        out.append(r)
+    return out
 
 
 def write_csv(rows, out):
@@ -323,10 +327,13 @@ def main():
 
     # 3. analyse (always tear the container down unless --keep)
     try:
-        rows, io_metrics = analyze(base, a.host_label, a.label, a.window, a.at, a.include, a.exclude)
-        render_by_host(rows, a.host_label)
-        write_csv(rows, out)
-        print(f"\n{len(rows)} rows  →  {out}")
+        rows, io_metrics = analyze(base, a.host_label, a.label, a.window, a.at)
+        render_by_host(rows, a.host_label)   # tables show every row
+        csv_rows = filter_rows(rows, a.label, a.include, a.exclude)
+        if not csv_rows:
+            sys.exit("!! no rows left for the CSV after --include/--exclude.")
+        write_csv(csv_rows, out)
+        print(f"\ntable: {len(rows)} rows (all)   CSV: {len(csv_rows)} rows  →  {out}")
         if not io_metrics:
             print("note: no io bytes metric (old exporter); IO is IOWeight only.", file=sys.stderr)
         print("note: one row per (host, user); each host is sized from its own usage. "
