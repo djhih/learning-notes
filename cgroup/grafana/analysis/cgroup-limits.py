@@ -19,6 +19,7 @@ Examples:
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,10 @@ import urllib.parse
 import urllib.request
 
 ANALYZE_NAME = "cgroup-analyze"
+
+# MemoryMax = min(peak * MEM_FACTOR, host root-cgroup peak * SYS_FRAC)
+MEM_FACTOR = 1.5
+SYS_FRAC = 0.9
 
 
 # shell / docker
@@ -175,7 +180,7 @@ def mib(n):
     return f"{max(0, round(float(n) / 2**20))}M"
 
 
-def analyze(base, host_label, user_label, window, at=0):
+def analyze(base, host_label, user_label, window, at=0, include=None, exclude=None):
     H, L, W = host_label, user_label, window
     at = at or detect_at(base)  # default: newest sample in the snapshot
     if at:
@@ -195,6 +200,9 @@ def analyze(base, host_label, user_label, window, at=0):
     cpu_p95 = keyed(q(base, f"quantile_over_time(0.95, rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6", at), by)
     cpu_peak = keyed(q(base, f"max_over_time(rate(cgroup_cpu_usage_usec_total[5m])[{W}:5m]) / 1e6", at), by)
 
+    # Per-host memory ceiling: max over all cgroups on a host == the root cgroup peak.
+    sys_mem = keyed(q(base, f"max by ({H}) (max_over_time(cgroup_memory_current_bytes[{W}]))", at), (H,))
+
     io_p95, io_peak = {}, {}
     if io_metrics:  # older exporters have no io bytes metric
         rate_sum = " + ".join(f"rate({m}[5m])" for m in io_metrics)
@@ -205,22 +213,38 @@ def analyze(base, host_label, user_label, window, at=0):
     if not idx:
         sys.exit("!! no data. --window may be too short, or --label is wrong.")
 
+    # Keep only real users: filter the user label (applied to rows, not the ceiling).
+    inc = re.compile(include) if include else None
+    exc = re.compile(exclude) if exclude else None
+
     rows = []
     for k in idx:  # k = (host, user)
+        user = k[1]
+        if inc and not inc.search(user):
+            continue
+        if exc and exc.search(user):
+            continue
         mp, mk, m5, cpk = mem_p95.get(k, 0), mem_peak.get(k, 0), mem_p50.get(k, 0), cpu_peak.get(k, 0)
+        mem_max = mk * MEM_FACTOR
+        cap = sys_mem.get((k[0],), 0) * SYS_FRAC   # host root-cgroup peak * 0.9
+        if cap:
+            mem_max = min(mem_max, cap)
         row = {
             H: k[0], L: k[1],
             # observed usage
             "mem_p95": h_bytes(mp), "mem_peak": h_bytes(mk),
             "cpu_p95_cores": round(cpu_p95.get(k, 0), 2), "cpu_peak_cores": round(cpk, 2),
-            # suggested limits: High=p95 (soft), Max=peak*1.3 (hard), Low=p50 (protected floor)
-            "MemoryHigh": mib(mp), "MemoryMax": mib(mk * 1.3), "MemoryLow": mib(m5),
+            # suggested limits: High=p95 (soft), Low=p50 (floor),
+            # Max=min(peak*MEM_FACTOR, host_root_peak*SYS_FRAC) (hard)
+            "MemoryHigh": mib(mp), "MemoryMax": mib(mem_max), "MemoryLow": mib(m5),
             "CPUWeight": 100, "CPUQuota": f"{max(1, round(cpk * 1.2 * 100))}%", "IOWeight": 100,
         }
         if io_metrics:
             row["io_p95"] = h_bytes(io_p95.get(k, 0)) + "/s"
             row["io_peak"] = h_bytes(io_peak.get(k, 0)) + "/s"
         rows.append(row)
+    if not rows:
+        sys.exit("!! no rows after --include/--exclude filter.")
     return rows, io_metrics
 
 
@@ -275,6 +299,8 @@ def main():
     p.add_argument("--image", default="prom/prometheus:v2.55.1")
     p.add_argument("--label", default="service", help="label identifying a user")
     p.add_argument("--host-label", default="instance", help="label identifying a host")
+    p.add_argument("--include", help="regex: keep only users whose --label value matches")
+    p.add_argument("--exclude", help="regex: drop users whose --label value matches")
     p.add_argument("--window", default="15d")
     p.add_argument("--at", type=int, default=0, help="eval time (unix seconds); 0 = auto (newest sample)")
     p.add_argument("--out", help="CSV output path (default <workdir>/cgroup_limits.csv)")
@@ -297,7 +323,7 @@ def main():
 
     # 3. analyse (always tear the container down unless --keep)
     try:
-        rows, io_metrics = analyze(base, a.host_label, a.label, a.window, a.at)
+        rows, io_metrics = analyze(base, a.host_label, a.label, a.window, a.at, a.include, a.exclude)
         render_by_host(rows, a.host_label)
         write_csv(rows, out)
         print(f"\n{len(rows)} rows  →  {out}")
