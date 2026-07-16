@@ -210,7 +210,7 @@
     },
     {
       "type": "stat",
-      "title": "Max Mem PSI (some/10s)",
+      "title": "Max Mem PSI (some, 5m avg)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -227,14 +227,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(cgroup_psi_memory_some_avg10)",
+          "expr": "max(rate(cgroup_psi_memory_some_seconds_total[5m]))",
           "refId": "A",
           "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
+          "unit": "percentunit",
           "decimals": 1,
           "mappings": [],
           "thresholds": {
@@ -246,11 +246,11 @@
               },
               {
                 "color": "yellow",
-                "value": 20
+                "value": 0.2
               },
               {
                 "color": "red",
-                "value": 50
+                "value": 0.5
               }
             ]
           }
@@ -381,7 +381,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (instance) (cgroup_psi_memory_some_avg10)",
+          "expr": "max by (instance) (rate(cgroup_psi_memory_some_seconds_total[5m]))",
           "refId": "D",
           "instant": true,
           "format": "table"
@@ -402,7 +402,7 @@
           "id": "joinByField",
           "options": {
             "byField": "instance",
-            "mode": "outer"
+            "mode": "outerTabular"
           }
         },
         {
@@ -533,7 +533,7 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "percent"
+                "value": "percentunit"
               },
               {
                 "id": "thresholds",
@@ -546,11 +546,11 @@
                     },
                     {
                       "color": "yellow",
-                      "value": 20
+                      "value": 0.2
                     },
                     {
                       "color": "red",
-                      "value": 50
+                      "value": 0.5
                     }
                   ]
                 }
@@ -748,7 +748,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Memory PSI (some, 10s) by Host",
+      "title": "Memory PSI (some, 5m avg) by Host",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -766,14 +766,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (instance) (cgroup_psi_memory_some_avg10)",
+          "expr": "max by (instance) (rate(cgroup_psi_memory_some_seconds_total[5m]))",
           "refId": "A",
           "legendFormat": "{{instance}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
+          "unit": "percentunit",
           "decimals": 1,
           "custom": {
             "drawStyle": "line",

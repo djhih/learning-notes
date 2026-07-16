@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "cgroup v2 exporter (cgroup_* metrics) — overview + per-host detail.",
+  "description": "cgroup v2 exporter (cgroup_* metrics) \u2014 overview + per-host detail.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -223,14 +223,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(cgroup_psi_memory_some_avg10{instance=\"$instance\"})",
+          "expr": "max(rate(cgroup_psi_memory_some_seconds_total{instance=\"$instance\"}[5m]))",
           "refId": "A",
           "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
+          "unit": "percentunit",
           "decimals": 1,
           "mappings": [],
           "thresholds": {
@@ -242,11 +242,11 @@
               },
               {
                 "color": "yellow",
-                "value": 20
+                "value": 0.2
               },
               {
                 "color": "red",
-                "value": 50
+                "value": 0.5
               }
             ]
           }
@@ -346,16 +346,16 @@
     },
     {
       "type": "table",
-      "title": "Top services by memory usage",
+      "title": "Top processes \u2014 memory",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Each cgroup service ranked by real (anon) memory in use — top row is the biggest consumer. Rows are services (cgroups), i.e. groups of processes, not individual PIDs. Extra columns: Delta anon = growing fast (culprit), refault/s = thrashing (victim), direct/s = hit its own limit, mem PSI = pain, OOM/s = already killed.",
+      "description": "10 biggest resident-memory processes host-wide. Click a row for that user's full breakdown (with command lines).",
       "gridPos": {
         "x": 0,
         "y": 5,
-        "w": 24,
+        "w": 8,
         "h": 10
       },
       "targets": [
@@ -364,99 +364,36 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (service) (cgroup_memory_anon_bytes{instance=\"$instance\",service=~\"$service\"})",
+          "expr": "topk(10, cgroup_top_process_memory_bytes{instance=\"$instance\",service=~\"$service\"})",
           "refId": "A",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (service) (delta(cgroup_memory_anon_bytes{instance=\"$instance\",service=~\"$service\"}[15m]))",
-          "refId": "B",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (service) (rate(cgroup_memory_workingset_refault_file_total{instance=\"$instance\",service=~\"$service\"}[5m]))",
-          "refId": "C",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (service) (rate(cgroup_memory_pgscan_direct_total{instance=\"$instance\",service=~\"$service\"}[5m]))",
-          "refId": "D",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "max by (service) (cgroup_psi_memory_some_avg10{instance=\"$instance\",service=~\"$service\"})",
-          "refId": "E",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (service) (rate(cgroup_memory_events_oom_kill_total{instance=\"$instance\",service=~\"$service\"}[5m]))",
-          "refId": "F",
           "instant": true,
           "format": "table"
         }
       ],
       "transformations": [
         {
-          "id": "joinByField",
-          "options": {
-            "byField": "service",
-            "mode": "outer"
-          }
-        },
-        {
           "id": "organize",
           "options": {
             "excludeByName": {
-              "Time 1": true,
-              "Time 2": true,
-              "Time 3": true,
-              "Time 4": true,
-              "Time 5": true,
-              "Time 6": true,
-              "Time": true
+              "Time": true,
+              "instance": true,
+              "job": true,
+              "__name__": true,
+              "uid": true,
+              "rank": true,
+              "cmd": true
             },
             "indexByName": {
               "service": 0,
-              "Value #A": 1,
-              "Value #B": 2,
-              "Value #C": 3,
-              "Value #D": 4,
-              "Value #E": 5,
-              "Value #F": 6
+              "pid": 1,
+              "comm": 2,
+              "Value": 3
             },
             "renameByName": {
-              "service": "Service",
-              "Value #A": "anon",
-              "Value #B": "Δanon 15m",
-              "Value #C": "refault/s",
-              "Value #D": "direct/s",
-              "Value #E": "mem PSI",
-              "Value #F": "OOM/s"
+              "service": "User",
+              "pid": "PID",
+              "comm": "Process",
+              "Value": "RSS"
             }
           }
         },
@@ -466,7 +403,7 @@
             "fields": {},
             "sort": [
               {
-                "field": "anon",
+                "field": "RSS",
                 "desc": true
               }
             ]
@@ -475,9 +412,6 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
           "custom": {
             "align": "auto",
             "cellOptions": {
@@ -485,6 +419,13 @@
             },
             "inspect": false
           },
+          "links": [
+            {
+              "title": "Top 10 commands for ${__data.fields.User}",
+              "url": "/d/cgroup-user-processes?${__url_time_range}&var-user=${__data.fields.User}",
+              "targetBlank": false
+            }
+          ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -499,18 +440,39 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Service"
+              "options": "RSS"
             },
             "properties": [
               {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Top processes for ${__value.raw}",
-                    "url": "/d/cgroup-user-processes?var-user=${__value.raw}&${__url_time_range}",
-                    "targetBlank": false
-                  }
-                ]
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "User"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
               },
               {
                 "id": "custom.cellOptions",
@@ -530,121 +492,126 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "anon"
+              "options": "PID"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "bytes"
-              },
-              {
-                "id": "decimals",
-                "value": 1
+                "id": "custom.width",
+                "value": 70
               }
             ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top processes \u2014 CPU",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Busiest processes host-wide (100 = one core). Click a row for that user's full breakdown.",
+      "gridPos": {
+        "x": 8,
+        "y": 5,
+        "w": 8,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
           },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Δanon 15m"
+          "expr": "topk(10, cgroup_top_process_cpu_percent{instance=\"$instance\",service=~\"$service\"})",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "instance": true,
+              "job": true,
+              "__name__": true,
+              "uid": true,
+              "rank": true,
+              "cmd": true
             },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "bytes"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "yellow",
-                      "value": 1000000000.0
-                    },
-                    {
-                      "color": "red",
-                      "value": 10000000000.0
-                    }
-                  ]
-                }
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background",
-                  "mode": "gradient"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "refault/s"
+            "indexByName": {
+              "service": 0,
+              "pid": 1,
+              "comm": 2,
+              "Value": 3
             },
-            "properties": [
+            "renameByName": {
+              "service": "User",
+              "pid": "PID",
+              "comm": "Process",
+              "Value": "CPU %"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
               {
-                "id": "unit",
-                "value": "short"
-              },
-              {
-                "id": "decimals",
-                "value": 0
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 1
-                    }
-                  ]
-                }
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background",
-                  "mode": "gradient"
-                }
+                "field": "CPU %",
+                "desc": true
               }
             ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "direct/s"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
             },
-            "properties": [
+            "inspect": false
+          },
+          "links": [
+            {
+              "title": "Top 10 commands for ${__data.fields.User}",
+              "url": "/d/cgroup-user-processes?${__url_time_range}&var-user=${__data.fields.User}",
+              "targetBlank": false
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
               {
-                "id": "unit",
-                "value": "short"
-              },
-              {
-                "id": "decimals",
-                "value": 0
+                "color": "green",
+                "value": null
               }
             ]
-          },
+          }
+        },
+        "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "mem PSI"
+              "options": "CPU %"
             },
             "properties": [
               {
@@ -656,30 +623,39 @@
                 "value": 1
               },
               {
-                "id": "thresholds",
+                "id": "custom.cellOptions",
                 "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "yellow",
-                      "value": 20
-                    },
-                    {
-                      "color": "red",
-                      "value": 50
-                    }
-                  ]
+                  "type": "gauge",
+                  "mode": "gradient"
                 }
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "User"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
               },
               {
                 "id": "custom.cellOptions",
                 "value": {
-                  "type": "color-background",
-                  "mode": "gradient"
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
                 }
               }
             ]
@@ -687,38 +663,183 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "OOM/s"
+              "options": "PID"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top processes \u2014 disk IO",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Highest current disk IO rate (read+write) host-wide. Click a row for that user's full breakdown.",
+      "gridPos": {
+        "x": 16,
+        "y": 5,
+        "w": 8,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "topk(10, cgroup_top_process_io_bytes_per_sec{instance=\"$instance\",service=~\"$service\"})",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "instance": true,
+              "job": true,
+              "__name__": true,
+              "uid": true,
+              "rank": true,
+              "cmd": true
+            },
+            "indexByName": {
+              "service": 0,
+              "pid": 1,
+              "comm": 2,
+              "Value": 3
+            },
+            "renameByName": {
+              "service": "User",
+              "pid": "PID",
+              "comm": "Process",
+              "Value": "IO B/s"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "IO B/s",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "links": [
+            {
+              "title": "Top 10 commands for ${__data.fields.User}",
+              "url": "/d/cgroup-user-processes?${__url_time_range}&var-user=${__data.fields.User}",
+              "targetBlank": false
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "IO B/s"
             },
             "properties": [
               {
                 "id": "unit",
-                "value": "short"
+                "value": "Bps"
               },
               {
                 "id": "decimals",
-                "value": 3
+                "value": 1
               },
               {
-                "id": "thresholds",
+                "id": "custom.cellOptions",
                 "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 0.001
-                    }
-                  ]
+                  "type": "gauge",
+                  "mode": "gradient"
                 }
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "User"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
               },
               {
                 "id": "custom.cellOptions",
                 "value": {
                   "type": "color-text"
                 }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "PID"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
               }
             ]
           }
@@ -738,7 +859,7 @@
     },
     {
       "type": "row",
-      "title": "Culprits — memory hogs",
+      "title": "Per-service resource use",
       "collapsed": false,
       "datasource": {
         "type": "prometheus",
@@ -754,345 +875,15 @@
     },
     {
       "type": "timeseries",
-      "title": "Anon growth — Top 5",
+      "title": "Memory by Service",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Slope of anon memory. Positive and sustained = a real memory hog; flat = innocent.",
+      "description": "memory.current per service (not stacked \u2014 line height = legend value).",
       "gridPos": {
         "x": 0,
         "y": 16,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "topk(5, deriv(cgroup_memory_anon_bytes{instance=\"$instance\",service=~\"$service\"}[15m]))",
-          "refId": "A",
-          "legendFormat": "{{service}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "binBps",
-          "decimals": 1,
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisCenteredZero": false,
-            "spanNulls": true
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max",
-            "mean"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Anon vs file — host total",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "How much of memory is anon (real) vs file (reclaimable cache). anon-dominant = genuinely full.",
-      "gridPos": {
-        "x": 12,
-        "y": 16,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(cgroup_memory_anon_bytes{instance=\"$instance\",service=~\"$service\"})",
-          "refId": "A",
-          "legendFormat": "anon (real, unreclaimable)"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(cgroup_memory_file_bytes{instance=\"$instance\",service=~\"$service\"})",
-          "refId": "B",
-          "legendFormat": "file (page cache, reclaimable)"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "decimals": 1,
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 25,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            },
-            "axisCenteredZero": false,
-            "spanNulls": true
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max",
-            "mean"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "row",
-      "title": "Victims — cache thrashing & reclaim",
-      "collapsed": false,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 24,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "Refault rate — Top 5",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Hot file pages evicted then read back = thrashing. This is who got hurt.",
-      "gridPos": {
-        "x": 0,
-        "y": 25,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "topk(5, rate(cgroup_memory_workingset_refault_file_total{instance=\"$instance\",service=~\"$service\"}[5m]))",
-          "refId": "A",
-          "legendFormat": "{{service}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisCenteredZero": false,
-            "spanNulls": true
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max",
-            "mean"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Reclaim — direct vs kswapd",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "direct = a cgroup squeezing itself (local limit). kswapd = the whole host is short on RAM (global).",
-      "gridPos": {
-        "x": 12,
-        "y": 25,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(rate(cgroup_memory_pgscan_direct_total{instance=\"$instance\",service=~\"$service\"}[5m]))",
-          "refId": "A",
-          "legendFormat": "direct (hit own limit)"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(rate(cgroup_memory_pgscan_kswapd_total{instance=\"$instance\",service=~\"$service\"}[5m]))",
-          "refId": "B",
-          "legendFormat": "kswapd (whole host low)"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisCenteredZero": false,
-            "spanNulls": true
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max",
-            "mean"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "row",
-      "title": "Per-service resource use",
-      "collapsed": false,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 33,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "Memory by Service (stacked)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "",
-      "gridPos": {
-        "x": 0,
-        "y": 34,
         "w": 12,
         "h": 8
       },
@@ -1115,10 +906,10 @@
             "drawStyle": "line",
             "lineInterpolation": "linear",
             "lineWidth": 1,
-            "fillOpacity": 25,
+            "fillOpacity": 8,
             "showPoints": "never",
             "stacking": {
-              "mode": "normal",
+              "mode": "none",
               "group": "A"
             },
             "axisCenteredZero": false,
@@ -1162,7 +953,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 34,
+        "y": 16,
         "w": 12,
         "h": 8
       },
@@ -1223,8 +1014,148 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Disk read by Service",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "io.stat rate. Absent for cgroups without the io controller (user slices need IOAccounting=yes / 'io' in user.slice cgroup.subtree_control).",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (service) (rate(cgroup_io_read_bytes_total{instance=\"$instance\",service=~\"$service\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisCenteredZero": false,
+            "spanNulls": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Disk write by Service",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "io.stat rate. Absent for cgroups without the io controller (user slices need IOAccounting=yes / 'io' in user.slice cgroup.subtree_control).",
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (service) (rate(cgroup_io_written_bytes_total{instance=\"$instance\",service=~\"$service\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisCenteredZero": false,
+            "spanNulls": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "type": "row",
-      "title": "Pressure (PSI some, 10s avg)",
+      "title": "Pressure (PSI some, share of time stalled, 5m avg)",
       "collapsed": false,
       "datasource": {
         "type": "prometheus",
@@ -1232,7 +1163,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 32,
         "w": 24,
         "h": 1
       },
@@ -1248,7 +1179,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 43,
+        "y": 33,
         "w": 8,
         "h": 7
       },
@@ -1258,14 +1189,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "cgroup_psi_cpu_some_avg10{instance=\"$instance\",service=~\"$service\"}",
+          "expr": "rate(cgroup_psi_cpu_some_seconds_total{instance=\"$instance\",service=~\"$service\"}[5m])",
           "refId": "A",
           "legendFormat": "{{service}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
+          "unit": "percentunit",
           "decimals": 1,
           "custom": {
             "drawStyle": "line",
@@ -1318,7 +1249,7 @@
       "description": "",
       "gridPos": {
         "x": 8,
-        "y": 43,
+        "y": 33,
         "w": 8,
         "h": 7
       },
@@ -1328,14 +1259,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "cgroup_psi_memory_some_avg10{instance=\"$instance\",service=~\"$service\"}",
+          "expr": "rate(cgroup_psi_memory_some_seconds_total{instance=\"$instance\",service=~\"$service\"}[5m])",
           "refId": "A",
           "legendFormat": "{{service}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
+          "unit": "percentunit",
           "decimals": 1,
           "custom": {
             "drawStyle": "line",
@@ -1388,7 +1319,7 @@
       "description": "",
       "gridPos": {
         "x": 16,
-        "y": 43,
+        "y": 33,
         "w": 8,
         "h": 7
       },
@@ -1398,14 +1329,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "cgroup_psi_io_some_avg10{instance=\"$instance\",service=~\"$service\"}",
+          "expr": "rate(cgroup_psi_io_some_seconds_total{instance=\"$instance\",service=~\"$service\"}[5m])",
           "refId": "A",
           "legendFormat": "{{service}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
+          "unit": "percentunit",
           "decimals": 1,
           "custom": {
             "drawStyle": "line",
@@ -1458,7 +1389,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 50,
+        "y": 40,
         "w": 24,
         "h": 1
       },
@@ -1474,7 +1405,7 @@
       "description": "cgroup_cpu_throttled_usec_total rate; >0 means hitting the CPU quota.",
       "gridPos": {
         "x": 0,
-        "y": 51,
+        "y": 41,
         "w": 12,
         "h": 7
       },
@@ -1544,7 +1475,7 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 51,
+        "y": 41,
         "w": 12,
         "h": 7
       },
@@ -1610,7 +1541,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 58,
+        "y": 48,
         "w": 24,
         "h": 1
       },
@@ -1625,7 +1556,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 59,
+        "y": 49,
         "w": 6,
         "h": 6
       },
@@ -1682,7 +1613,7 @@
       "description": "",
       "gridPos": {
         "x": 6,
-        "y": 59,
+        "y": 49,
         "w": 18,
         "h": 6
       },
@@ -1734,6 +1665,138 @@
             "lastNotNull",
             "max",
             "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "User memory: services (user@) vs login sessions",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Per user: memory of the systemd user manager tree (background services) vs interactive login sessions (slice minus manager).",
+      "gridPos": {
+        "x": 0,
+        "y": 55,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_user_manager_memory_current_bytes{instance=\"$instance\",service=~\"$service\"}",
+          "refId": "A",
+          "legendFormat": "{{service}} \u00b7 services"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_memory_current_bytes{instance=\"$instance\",service=~\"$service\",uid!=\"-1\"} - on(uid) group_left() cgroup_user_manager_memory_current_bytes{instance=\"$instance\"}",
+          "refId": "B",
+          "legendFormat": "{{service}} \u00b7 sessions"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Stuck (D-state) & zombie processes by user",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Commands with processes in uninterruptible sleep (stuck on IO) or zombies. Empty panel = healthy.",
+      "gridPos": {
+        "x": 12,
+        "y": 55,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (service) (cgroup_process_dstate_count{instance=\"$instance\",service=~\"$service\"}) > 0",
+          "refId": "A",
+          "legendFormat": "D \u00b7 {{service}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (service) (cgroup_process_zombie_count{instance=\"$instance\",service=~\"$service\"}) > 0",
+          "refId": "B",
+          "legendFormat": "Z \u00b7 {{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
           ]
         },
         "tooltip": {

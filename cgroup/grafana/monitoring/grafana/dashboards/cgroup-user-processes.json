@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Per-user top processes (memory & CPU) with command line — the process-level drill-down for the cgroup dashboards. No data for a name means it is not a login user (uid>=1000) or not in procwatch's top-N.",
+  "description": "Per-user top processes (memory & CPU) with command line \u2014 the process-level drill-down for the cgroup dashboards. Served by exporter.py's cgroup_process_* / cgroup_top_process_* metrics. No data for a name means the user has no login session or the command is outside the exporter's top-N.",
   "editable": true,
   "graphTooltip": 0,
   "id": null,
@@ -40,9 +40,9 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "topk(1, procwatch_top_mem_bytes{user=~\"$user\"})",
-          "legendFormat": "{{comm}} · {{user}}",
+          "expr": "topk(1, cgroup_top_process_memory_bytes{service=~\"$user\"})",
           "refId": "A",
+          "legendFormat": "{{comm}} \u00b7 {{service}}",
           "instant": true
         }
       ],
@@ -109,9 +109,9 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "topk(1, procwatch_top_cpu_percent{user=~\"$user\"})",
-          "legendFormat": "{{comm}} · {{user}}",
+          "expr": "topk(1, cgroup_top_process_cpu_percent{service=~\"$user\"})",
           "refId": "A",
+          "legendFormat": "{{comm}} \u00b7 {{service}}",
           "instant": true
         }
       ],
@@ -160,12 +160,12 @@
     },
     {
       "type": "bargauge",
-      "title": "Memory — top processes",
+      "title": "Memory \u2014 top commands",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Top resident-memory processes. One bar per process; hover a bar for the full command line.",
+      "description": "Top resident memory aggregated by command (all processes with the same command summed).",
       "gridPos": {
         "x": 0,
         "y": 4,
@@ -178,9 +178,9 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "topk(10, procwatch_top_mem_bytes{user=~\"$user\"})",
-          "legendFormat": "{{user}} · {{comm}} ({{pid}})",
+          "expr": "topk(10, cgroup_process_memory_rss_bytes{service=~\"$user\"})",
           "refId": "A",
+          "legendFormat": "{{service}} \u00b7 {{comm}}",
           "instant": true
         }
       ],
@@ -228,12 +228,12 @@
     },
     {
       "type": "bargauge",
-      "title": "CPU — top processes",
+      "title": "CPU \u2014 top commands",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Busiest processes (100 = one core). One bar per process; hover for the full command line.",
+      "description": "Busiest commands (100 = one core), all processes with the same command summed.",
       "gridPos": {
         "x": 12,
         "y": 4,
@@ -246,9 +246,9 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "topk(10, procwatch_top_cpu_percent{user=~\"$user\"})",
-          "legendFormat": "{{user}} · {{comm}} ({{pid}})",
+          "expr": "topk(10, cgroup_process_cpu_percent{service=~\"$user\"})",
           "refId": "A",
+          "legendFormat": "{{service}} \u00b7 {{comm}}",
           "instant": true
         }
       ],
@@ -295,12 +295,423 @@
       }
     },
     {
-      "type": "row",
-      "title": "Details — exact command lines",
-      "collapsed": true,
+      "type": "timeseries",
+      "title": "Swapped-out memory by command",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "VmSwap by command \u2014 who got pushed to swap by memory.high/max pressure.",
       "gridPos": {
         "x": 0,
         "y": 14,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "topk(10, cgroup_process_swap_bytes{service=~\"$user\"})",
+          "refId": "A",
+          "legendFormat": "{{service}} \u00b7 {{comm}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Stuck (D-state) & zombie processes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Uninterruptible sleep = stuck on IO (dead NFS, saturated disk). Series appear only when non-zero.",
+      "gridPos": {
+        "x": 12,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_dstate_count{service=~\"$user\"} > 0",
+          "refId": "A",
+          "legendFormat": "D \u00b7 {{service}} \u00b7 {{comm}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_zombie_count{service=~\"$user\"} > 0",
+          "refId": "B",
+          "legendFormat": "Z \u00b7 {{service}} \u00b7 {{comm}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Command overview (current)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Everything the exporter knows per command, right now. IO columns are lifetime totals of the currently-running processes.",
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_count{service=~\"$user\"}",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_threads{service=~\"$user\"}",
+          "refId": "B",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_memory_rss_bytes{service=~\"$user\"}",
+          "refId": "C",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_swap_bytes{service=~\"$user\"}",
+          "refId": "D",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_cpu_percent{service=~\"$user\"}",
+          "refId": "E",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_io_read_bytes{service=~\"$user\"}",
+          "refId": "F",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_io_written_bytes{service=~\"$user\"}",
+          "refId": "G",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_dstate_count{service=~\"$user\"}",
+          "refId": "H",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cgroup_process_zombie_count{service=~\"$user\"}",
+          "refId": "I",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "instance": true,
+              "job": true,
+              "__name__": true,
+              "uid": true
+            },
+            "indexByName": {
+              "service": 0,
+              "comm": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4,
+              "Value #D": 5,
+              "Value #E": 6,
+              "Value #F": 7,
+              "Value #G": 8,
+              "Value #H": 9,
+              "Value #I": 10
+            },
+            "renameByName": {
+              "service": "User",
+              "comm": "Command",
+              "Value #A": "Procs",
+              "Value #B": "Threads",
+              "Value #C": "RSS",
+              "Value #D": "Swap",
+              "Value #E": "CPU %",
+              "Value #F": "IO read",
+              "Value #G": "IO written",
+              "Value #H": "D-state",
+              "Value #I": "Zombies"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "RSS",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "RSS"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Swap"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "IO read"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "IO written"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "CPU %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "User"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Details \u2014 exact command lines",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 32,
         "w": 24,
         "h": 1
       },
@@ -312,12 +723,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "description": "Biggest resident-memory process for each user, with its command line. Rank 1 = the top consumer.",
+          "description": "Biggest resident-memory processes per user with exact pid/command. Rank 1 = top consumer.",
           "gridPos": {
             "x": 0,
-            "y": 15,
+            "y": 33,
             "w": 24,
-            "h": 11
+            "h": 9
           },
           "targets": [
             {
@@ -325,7 +736,7 @@
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "procwatch_top_mem_bytes{user=~\"$user\"}",
+              "expr": "cgroup_top_process_memory_bytes{service=~\"$user\"}",
               "refId": "A",
               "instant": true,
               "format": "table"
@@ -339,10 +750,11 @@
                   "Time": true,
                   "instance": true,
                   "job": true,
-                  "__name__": true
+                  "__name__": true,
+                  "uid": true
                 },
                 "indexByName": {
-                  "user": 0,
+                  "service": 0,
                   "rank": 1,
                   "pid": 2,
                   "comm": 3,
@@ -350,7 +762,7 @@
                   "Value": 5
                 },
                 "renameByName": {
-                  "user": "User",
+                  "service": "User",
                   "rank": "#",
                   "pid": "PID",
                   "comm": "Process",
@@ -493,6 +905,196 @@
               "fields": ""
             }
           }
+        },
+        {
+          "type": "table",
+          "title": "Top CPU processes (full command line)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "description": "Busiest processes per user with exact pid/command (100 = one core).",
+          "gridPos": {
+            "x": 0,
+            "y": 42,
+            "w": 24,
+            "h": 9
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "cgroup_top_process_cpu_percent{service=~\"$user\"}",
+              "refId": "A",
+              "instant": true,
+              "format": "table"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "instance": true,
+                  "job": true,
+                  "__name__": true,
+                  "uid": true
+                },
+                "indexByName": {
+                  "service": 0,
+                  "rank": 1,
+                  "pid": 2,
+                  "comm": 3,
+                  "cmd": 4,
+                  "Value": 5
+                },
+                "renameByName": {
+                  "service": "User",
+                  "rank": "#",
+                  "pid": "PID",
+                  "comm": "Process",
+                  "cmd": "Command",
+                  "Value": "CPU %"
+                }
+              }
+            },
+            {
+              "id": "sortBy",
+              "options": {
+                "fields": {},
+                "sort": [
+                  {
+                    "field": "CPU %",
+                    "desc": true
+                  }
+                ]
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "CPU %"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "percent"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 1
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "gauge",
+                      "mode": "gradient"
+                    }
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 160
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Command"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 560
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "User"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "blue"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "#"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 50
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "PID"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 90
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false,
+              "reducer": [
+                "sum"
+              ],
+              "fields": ""
+            }
+          }
         }
       ]
     }
@@ -514,7 +1116,7 @@
           "uid": "prometheus"
         },
         "query": {
-          "query": "label_values(procwatch_top_mem_bytes, user)",
+          "query": "label_values(cgroup_top_process_memory_bytes, service)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
