@@ -5,9 +5,10 @@ Small stressors that create cgroup load so you can watch the Grafana
 
 | program | what it does | panels it lights |
 | --- | --- | --- |
-| `hog.py`    | grows anonymous (real) memory and holds it | Culprits · anon, Anon growth |
-| `thrash.py` | rereads a file bigger than its memory cap  | Victims · Refault rate, Reclaim (direct) |
-| `burn.py`   | spins CPU workers                          | CPU usage rate, CPU throttle / PSI (with a quota) |
+| `hog.py`     | grows anonymous (real) memory and holds it | Top processes · memory, Memory by Service |
+| `thrash.py`  | rereads a file bigger than its memory cap  | Memory/IO PSI, Disk read by Service |
+| `burn.py`    | spins CPU workers at 100%                  | Top processes · CPU, CPU throttle / PSI (with a quota) |
+| `cpuload.py` | holds workers at a chosen CPU% (duty cycle) | Top processes · CPU — with a known expected value to verify against |
 
 ## Run
 
